@@ -4,6 +4,7 @@ set(sources
   main.cpp
   scratchpad.cpp
   expression.cpp
+  expr2.cpp
 )
 
 add_executable(tests ${sources})
