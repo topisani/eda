@@ -3,21 +3,27 @@
 
 namespace topisani::eda::expr2 {
 
+  struct evaluator {};
+
   template<typename T>
-  auto eval(const Literal<T>& lit) -> T {
+  auto visit(evaluator, const Literal<T>& lit) -> T {
     return static_cast<T>(lit.value);
   }
 
   template<AnOperandRef Lhs, AnOperandRef Rhs>
-  decltype(auto) eval(const Expression<PlusOp, Lhs, Rhs>& expr)
+  decltype(auto) visit(evaluator, const Expression<PlusOp, Lhs, Rhs>& expr)
   {
     return eval(get_op<0>(expr)) + eval(get_op<1>(expr));
   }
 
   template<AnOperandRef Lhs, AnOperandRef Rhs>
-  decltype(auto) eval(const Expression<MinusOp, Lhs, Rhs>& expr)
+  decltype(auto) visit(evaluator, const Expression<MinusOp, Lhs, Rhs>& expr)
   {
     return eval(get_op<0>(expr)) - eval(get_op<1>(expr));
+  }
+
+  decltype(auto) eval(AnOperandRef auto&& expr) {
+    return visit(evaluator(), FWD(expr));
   }
 
   TEST_CASE ("Expr2") {

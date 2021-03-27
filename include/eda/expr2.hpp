@@ -8,15 +8,6 @@
 /// An Expression template design based on https://hal.archives-ouvertes.fr/hal-01351060/document
 namespace topisani::eda::expr2 {
 
-  // clang-format off
-  template<typename T>
-  concept AnExpression = requires(T t) {
-    typename T::operator_t;
-    requires util::ATuple<typename T::operands_t>;
-    requires util::ConstructibleThroughApply<T, typename T::operands_t>;
-    {t.operands} -> std::same_as<typename T::operands_t>;
-  }; // clang-format on
-
   template<typename T>
   concept AnOperator = true;
 

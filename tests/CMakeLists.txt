@@ -3,8 +3,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(sources 
   main.cpp
   scratchpad.cpp
-  expression.cpp
   expr2.cpp
+  block.cpp
 )
 
 add_executable(tests ${sources})
