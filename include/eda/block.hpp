@@ -20,7 +20,8 @@ namespace topisani::eda {
     /// with it
     template<std::ranges::contiguous_range Range>
     requires(std::is_same_v<std::ranges::range_value_t<Range>, real>) //
-      AudioBuffer(Range&& data) noexcept                              // NOLINT
+      AudioBuffer(Range&& data)
+    noexcept // NOLINT
       : data_(std::forward<Range>(data))
     {}
 
@@ -97,10 +98,11 @@ namespace topisani::eda {
       requires(size() == 1)
     {
       return data_[0] == f;
-    };
+    }
 
-  private:
-    std::array<float, Channels> data_;
+  private : //
+            std::array<float, Channels>
+              data_ = {0};
   };
 
   template<>
@@ -131,7 +133,7 @@ namespace topisani::eda {
       return nullptr;
     }
 
-    bool operator==(const AudioFrame&) const noexcept = default;
+    constexpr bool operator==(const AudioFrame&) const noexcept = default;
   };
 
   template<std::size_t N>
@@ -141,7 +143,7 @@ namespace topisani::eda {
 
   template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
   requires(Begin >= 0 && ((End >= Begin && End <= Channels))) //
-    auto splice(const AudioFrame<Channels>& in)
+    constexpr auto splice(const AudioFrame<Channels>& in)
   {
     AudioFrame<End - Begin> res;
     std::copy(in.begin() + Begin, in.begin() + End, res.begin());
@@ -150,9 +152,24 @@ namespace topisani::eda {
 
   template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
   requires(Begin >= 0 && End < 0 && (Channels + End + 1) >= Begin) //
-    auto splice(const AudioFrame<Channels>& in)                    //
+    constexpr auto splice(const AudioFrame<Channels>& in)          //
   {
     return splice<Begin, Channels + End + 1, Channels>(in);
+  }
+
+  template<std::size_t S1, std::size_t S2>
+  constexpr auto concat(const AudioFrame<S1>& x1, const AudioFrame<S2>& x2) -> AudioFrame<S1 + S2>
+  {
+    AudioFrame<S1 + S2> res;
+    auto b2 = std::copy(x1.begin(), x1.end(), res.begin());
+    std::copy(x2.begin(), x2.end(), b2);
+    return res;
+  }
+
+  template<std::size_t S1, std::size_t... Sizes>
+  constexpr auto concat(const AudioFrame<S1>& x, const AudioFrame<Sizes>&... xs) -> AudioFrame<S1 + (Sizes + ...)>
+  {
+    return concat(x, concat(xs...));
   }
 
   template<typename T, std::size_t InChannels, std::size_t OutChannels>
@@ -163,17 +180,19 @@ namespace topisani::eda {
 
   // BLOCK /////////////////////////////////////////////
 
-  template<std::size_t InChannels, std::size_t OutChannels>
+  template<typename Derived, std::size_t InChannels, std::size_t OutChannels>
   struct BlockBase {
     static constexpr std::size_t in_channels = InChannels;
     static constexpr std::size_t out_channels = OutChannels;
+
+    constexpr auto operator()(auto&&... inputs) requires(sizeof...(inputs) <= InChannels);
   };
 
   template<typename T>
-  concept ABlock =                                           //
-    util::decays_to<decltype(T::in_channels), std::size_t>&& //
-      util::decays_to<decltype(T::in_channels), std::size_t>&&
-        std::is_base_of_v<BlockBase<T::in_channels, T::out_channels>, T>;
+  concept ABlock =                                            //
+    util::decays_to<decltype(T::in_channels), std::size_t> && //
+    util::decays_to<decltype(T::in_channels), std::size_t> &&
+    std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
 
   template<typename T>
   concept ABlockRef = ABlock<std::remove_cvref_t<T>>;
@@ -186,37 +205,46 @@ namespace topisani::eda {
   template<typename T>
   struct processor;
 
-  auto make_processor(ABlockRef auto&& b)
+  constexpr auto make_processor(ABlockRef auto&& b)
   {
     return processor<std::decay_t<decltype(b)>>(b);
   }
 
-  auto make_evaluator(ABlockRef auto&& b)
+  constexpr auto make_evaluator(ABlockRef auto&& b)
   {
     return evaluator<std::decay_t<decltype(b)>>(b);
   }
 
+  template<ABlock Block>
+  constexpr auto eval(Block block, AudioFrame<Block::in_channels> in)
+  {
+    return make_evaluator(block).eval(in);
+  }
+
   // LITERAL ///////////////////////////////////////////
 
-  struct Literal : BlockBase<0, 1> {
+  struct Literal : BlockBase<Literal, 0, 1> {
     float value;
   };
 
-  decltype(auto) wrap_literal(ABlockRef auto&& input)
+  constexpr decltype(auto) wrap_literal(ABlockRef auto&& input)
   {
     return FWD(input);
   }
 
-  inline Literal wrap_literal(float f)
+  constexpr Literal wrap_literal(float f)
   {
     return Literal{{}, f};
   }
+
+  template<typename T>
+  using wrapped_t = std::remove_cvref_t<decltype(wrap_literal(std::declval<T>()))>;
 
   template<>
   struct evaluator<Literal> {
     constexpr evaluator(Literal l) : literal_(l) {}
 
-    AudioFrame<1> eval(AudioFrame<0>)
+    constexpr AudioFrame<1> eval(AudioFrame<0>)
     {
       return {{literal_.value}};
     }
@@ -224,9 +252,52 @@ namespace topisani::eda {
     Literal literal_;
   };
 
+  namespace literals {
+    constexpr Literal operator "" _eda(long double f) {
+      return wrap_literal(f);
+    }
+    constexpr Literal operator "" _eda(unsigned long long f) {
+      return wrap_literal(f);
+    }
+  }
+
+  // CURRYING //////////////////////////////////////////
+
+  template<ABlock Block, ABlock Input>
+  requires(Input::out_channels <= Block::in_channels) //
+    struct Curry : BlockBase<Curry<Block, Input>,
+                             Input::in_channels + Block::in_channels - Input::out_channels,
+                             Block::out_channels> {
+    constexpr Curry(Block b, Input input) : block(b), input(input) {}
+
+    Block block;
+    Input input;
+  };
+
+  template<ABlock Block, ABlock Input>
+  struct evaluator<Curry<Block, Input>> {
+    constexpr evaluator(const Curry<Block, Input>& block) : block_(block.block), input_(block.input) {}
+
+    constexpr AudioFrame<Curry<Block, Input>::out_channels> eval(AudioFrame<Curry<Block, Input>::in_channels> in)
+    {
+      return block_.eval(concat(input_.eval(splice<0, Input::in_channels>(in)), splice<Input::in_channels, -1>(in)));
+    }
+
+  private:
+    evaluator<Block> block_;
+    evaluator<Input> input_;
+  };
+
+  template<typename D, std::size_t I, std::size_t O>
+  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) requires(sizeof...(inputs) <= I)
+  {
+    auto joined = (wrap_literal(FWD(inputs)), ...);
+    return Curry<D, decltype(joined)>(static_cast<D&>(*this), std::move(joined));
+  }
+
   // IDENT /////////////////////////////////////////////
 
-  struct Ident : BlockBase<1, 1> {};
+  struct Ident : BlockBase<Ident, 1, 1> {};
   static_assert(ABlock<Ident>);
 
   constexpr Ident ident;
@@ -252,11 +323,27 @@ namespace topisani::eda {
     }
   };
 
+  // CUT ///////////////////////////////////////////////
+
+  struct Cut : BlockBase<Cut, 1, 0> {};
+
+  constexpr Cut cut;
+
+  template<>
+  struct evaluator<Cut> {
+    constexpr evaluator(Cut) {}
+    static AudioFrame<0> eval(AudioFrame<1>)
+    {
+      return {};
+    }
+  };
+
   // PARALLEL //////////////////////////////////////////
 
   template<ABlock Lhs, ABlock Rhs>
-  struct Parallel : BlockBase<Lhs::in_channels + Rhs::in_channels, Lhs::out_channels + Rhs::out_channels> {
-    Parallel(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+  struct Parallel
+    : BlockBase<Parallel<Lhs, Rhs>, Lhs::in_channels + Rhs::in_channels, Lhs::out_channels + Rhs::out_channels> {
+    constexpr Parallel(Lhs l, Rhs r) : lhs(l), rhs(r) {}
     Lhs lhs;
     Rhs rhs;
   };
@@ -265,7 +352,7 @@ namespace topisani::eda {
   Parallel(Lhs, Rhs) -> Parallel<std::decay_t<Lhs>, std::decay_t<Rhs>>;
 
   template<typename Lhs, typename Rhs>
-  auto operator,(Lhs&& lhs, Rhs&& rhs) //
+  constexpr auto operator,(Lhs&& lhs, Rhs&& rhs) //
     requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
   {
     return Parallel(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
@@ -279,10 +366,7 @@ namespace topisani::eda {
     {
       auto l = lhs_.eval(splice<0, Lhs::in_channels>(in));
       auto r = rhs_.eval(splice<Lhs::in_channels, -1>(in));
-      AudioFrame<Parallel<Lhs, Rhs>::out_channels> res;
-      auto rbegin = std::copy(l.begin(), l.end(), res.begin());
-      std::copy(r.begin(), r.end(), rbegin);
-      return res;
+      return concat(l, r);
     }
 
   private:
@@ -294,8 +378,8 @@ namespace topisani::eda {
 
   template<ABlock Lhs, ABlock Rhs>
   requires(Lhs::out_channels == Rhs::in_channels) //
-    struct Serial : BlockBase<Lhs::in_channels, Rhs::out_channels> {
-    Serial(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+    struct Serial : BlockBase<Serial<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
+    constexpr Serial(Lhs l, Rhs r) : lhs(l), rhs(r) {}
     Lhs lhs;
     Rhs rhs;
   };
@@ -304,9 +388,12 @@ namespace topisani::eda {
   Serial(Lhs, Rhs) -> Serial<std::decay_t<Lhs>, std::decay_t<Rhs>>;
 
   template<typename Lhs, typename Rhs>
-  auto operator|(Lhs&& lhs, Rhs&& rhs) //
+  constexpr auto operator|(Lhs&& lhs, Rhs&& rhs) //
     requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
   {
+    // static_assert(std::decay_t<Lhs>::out_channels == std::decay_t<Rhs>::in_channels,
+    //               "Serial operator requires Out channels of left hand side to equal in channels of right hand side");
+    //               //
     return Serial(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
   }
 
@@ -325,34 +412,38 @@ namespace topisani::eda {
     evaluator<Rhs> rhs_;
   };
 
-  // PLUS //////////////////////////////////////////////
+  // Split /////////////////////////////////////////////
 
   template<ABlock Lhs, ABlock Rhs>
-    requires(Lhs::out_channels == 1) && (Rhs::out_channels == 1) //
-    struct Plus : BlockBase<Lhs::in_channels + Rhs::in_channels, 1> {
-    Plus(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+  requires(Rhs::in_channels % Lhs::out_channels == 0) //
+    struct Split : BlockBase<Split<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
+    constexpr Split(Lhs l, Rhs r) : lhs(l), rhs(r) {}
     Lhs lhs;
     Rhs rhs;
   };
 
   template<typename Lhs, typename Rhs>
-  Plus(Lhs, Rhs) -> Plus<std::decay_t<Lhs>, std::decay_t<Rhs>>;
+  Split(Lhs, Rhs) -> Split<std::decay_t<Lhs>, std::decay_t<Rhs>>;
 
   template<typename Lhs, typename Rhs>
-  auto operator+(Lhs&& lhs, Rhs&& rhs) //
+  constexpr auto operator<<(Lhs&& lhs, Rhs&& rhs) //
     requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
   {
-    return Plus(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return Split(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
   }
 
   template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Plus<Lhs, Rhs>> {
-    constexpr evaluator(const Plus<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-    constexpr AudioFrame<1> eval(AudioFrame<Plus<Lhs, Rhs>::in_channels> in)
+  struct evaluator<Split<Lhs, Rhs>> {
+    constexpr evaluator(const Split<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+
+    constexpr AudioFrame<Split<Lhs, Rhs>::out_channels> eval(AudioFrame<Split<Lhs, Rhs>::in_channels> in)
     {
-      float l = lhs_.eval(splice<0, Lhs::in_channels>(in));
-      float r = rhs_.eval(splice<Lhs::in_channels, -1>(in));
-      return AudioFrame<1>(l + r);
+      auto l = lhs_.eval(in);
+      AudioFrame<Rhs::in_channels> rhs_in;
+      for (std::size_t i = 0; i < rhs_in.channels(); i++) {
+        rhs_in[i] = l[i % l.channels()];
+      }
+      return rhs_.eval(rhs_in);
     }
 
   private:
@@ -360,10 +451,136 @@ namespace topisani::eda {
     evaluator<Rhs> rhs_;
   };
 
-} // namespace topisani::eda
+  // MERGE /////////////////////////////////////////////
 
-namespace topisani::eda::expr2 {
-  // Any block can be an operand
-  template<ABlockRef B>
-  struct enable_operand<B> : std::true_type {};
-} // namespace topisani::eda::expr2
+  template<ABlock Lhs, ABlock Rhs>
+  requires(Lhs::out_channels % Rhs::in_channels == 0) //
+    struct Merge : BlockBase<Merge<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
+    constexpr Merge(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+    Lhs lhs;
+    Rhs rhs;
+  };
+
+  template<typename Lhs, typename Rhs>
+  Merge(Lhs, Rhs) -> Merge<std::decay_t<Lhs>, std::decay_t<Rhs>>;
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator>>(Lhs&& lhs, Rhs&& rhs) //
+    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return Merge(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+  }
+
+  template<ABlock Lhs, ABlock Rhs>
+  struct evaluator<Merge<Lhs, Rhs>> {
+    constexpr evaluator(const Merge<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+
+    constexpr AudioFrame<Merge<Lhs, Rhs>::out_channels> eval(AudioFrame<Merge<Lhs, Rhs>::in_channels> in)
+    {
+      auto lhs_out = lhs_.eval(in);
+      AudioFrame<Rhs::in_channels> rhs_in;
+      for (std::size_t i = 0; i < lhs_out.channels(); i++) {
+        rhs_in[i % rhs_in.channels()] += lhs_out[i];
+      }
+      return rhs_.eval(rhs_in);
+    }
+
+  private:
+    evaluator<Lhs> lhs_;
+    evaluator<Rhs> rhs_;
+  };
+
+  // ARITHMETIC ////////////////////////////////////////
+
+#define EDA_DEFINE_BLOCK_BINOP(Name, Operator)                                                                         \
+  template<ABlock Lhs, ABlock Rhs>                                                                                     \
+  requires(Lhs::out_channels == 1) && (Rhs::out_channels == 1) struct Name                                             \
+    : BlockBase<Name<Lhs, Rhs>, Lhs::in_channels + Rhs::in_channels, 1> {                                              \
+    constexpr Name(Lhs l, Rhs r) : lhs(l), rhs(r) {}                                                                   \
+    Lhs lhs;                                                                                                           \
+    Rhs rhs;                                                                                                           \
+  };                                                                                                                   \
+                                                                                                                       \
+  template<typename Lhs, typename Rhs>                                                                                 \
+  Name(Lhs, Rhs) -> Name<std::decay_t<Lhs>, std::decay_t<Rhs>>;                                                        \
+                                                                                                                       \
+  template<typename Lhs, typename Rhs>                                                                                 \
+  constexpr auto operator Operator(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)                    \
+  {                                                                                                                    \
+    return Name(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));                                                       \
+  }                                                                                                                    \
+                                                                                                                       \
+  template<ABlock Lhs, ABlock Rhs>                                                                                     \
+  struct evaluator<Name<Lhs, Rhs>> {                                                                                   \
+    constexpr evaluator(const Name<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}                             \
+    constexpr AudioFrame<1> eval(AudioFrame<Name<Lhs, Rhs>::in_channels> in)                                           \
+    {                                                                                                                  \
+      float l = lhs_.eval(splice<0, Lhs::in_channels>(in));                                                            \
+      float r = rhs_.eval(splice<Lhs::in_channels, -1>(in));                                                           \
+      return {l Operator r};                                                                                           \
+    }                                                                                                                  \
+                                                                                                                       \
+  private:                                                                                                             \
+    evaluator<Lhs> lhs_;                                                                                               \
+    evaluator<Rhs> rhs_;                                                                                               \
+  };
+
+  EDA_DEFINE_BLOCK_BINOP(Plus, +)
+  EDA_DEFINE_BLOCK_BINOP(Minus, -)
+  EDA_DEFINE_BLOCK_BINOP(Times, *)
+  EDA_DEFINE_BLOCK_BINOP(Division, /)
+
+  // RECURSIVE /////////////////////////////////////////
+
+  template<typename D, ABlock Lhs, ABlock Rhs, std::size_t In, std::size_t Out>
+  struct BinOp : BlockBase<D, In, Out> {
+    constexpr BinOp(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+    Lhs lhs;
+    Rhs rhs;
+  };
+
+  template<ABlock Lhs, ABlock Rhs>
+  requires(Rhs::in_channels <= Lhs::out_channels) && (Rhs::out_channels <= Lhs::in_channels) //
+    struct Recursive : BinOp<Recursive<Lhs, Rhs>, Lhs, Rhs, Lhs::in_channels - Rhs::out_channels, Lhs::out_channels> {};
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator%(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return Recursive<wrapped_t<Lhs>, wrapped_t<Rhs>>{{wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs))}};
+  }
+
+  template<ABlock Lhs, ABlock Rhs>
+  struct evaluator<Recursive<Lhs, Rhs>> {
+    constexpr evaluator(const Recursive<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+    constexpr AudioFrame<Recursive<Lhs, Rhs>::out_channels> eval(AudioFrame<Recursive<Lhs, Rhs>::in_channels> in)
+    {
+      auto l_out = lhs_.eval(concat(memory_, in));
+      memory_ = rhs_.eval(splice<0, Rhs::in_channels>(l_out));
+      return l_out;
+    }
+
+  private:
+    AudioFrame<Rhs::out_channels> memory_;
+    evaluator<Lhs> lhs_;
+    evaluator<Rhs> rhs_;
+  };
+
+  // MEM ///////////////////////////////////////////////
+   
+  struct Mem : BlockBase<Mem, 1, 1> {};
+  constexpr Mem mem;
+
+  template<>
+  struct evaluator<Mem> {
+    constexpr evaluator(const Mem&) {}
+    constexpr AudioFrame<Mem::out_channels> eval(AudioFrame<Mem::in_channels> in)
+    {
+      auto res = memory_;
+      memory_ = in;
+      return res;
+    }
+
+    AudioFrame<1> memory_;
+  };
+
+} // namespace topisani::eda
