@@ -185,7 +185,7 @@ namespace topisani::eda {
     static constexpr std::size_t in_channels = InChannels;
     static constexpr std::size_t out_channels = OutChannels;
 
-    constexpr auto operator()(auto&&... inputs) requires(sizeof...(inputs) <= InChannels);
+    constexpr auto operator()(auto&&... inputs) const requires(sizeof...(inputs) <= InChannels);
   };
 
   template<typename T>
@@ -253,13 +253,15 @@ namespace topisani::eda {
   };
 
   namespace literals {
-    constexpr Literal operator "" _eda(long double f) {
+    constexpr Literal operator"" _eda(long double f)
+    {
       return wrap_literal(f);
     }
-    constexpr Literal operator "" _eda(unsigned long long f) {
+    constexpr Literal operator"" _eda(unsigned long long f)
+    {
       return wrap_literal(f);
     }
-  }
+  } // namespace literals
 
   // CURRYING //////////////////////////////////////////
 
@@ -289,10 +291,10 @@ namespace topisani::eda {
   };
 
   template<typename D, std::size_t I, std::size_t O>
-  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) requires(sizeof...(inputs) <= I)
+  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) const requires(sizeof...(inputs) <= I)
   {
     auto joined = (wrap_literal(FWD(inputs)), ...);
-    return Curry<D, decltype(joined)>(static_cast<D&>(*this), std::move(joined));
+    return Curry<D, decltype(joined)>(static_cast<const D&>(*this), std::move(joined));
   }
 
   // IDENT /////////////////////////////////////////////
@@ -492,43 +494,74 @@ namespace topisani::eda {
 
   // ARITHMETIC ////////////////////////////////////////
 
-#define EDA_DEFINE_BLOCK_BINOP(Name, Operator)                                                                         \
-  template<ABlock Lhs, ABlock Rhs>                                                                                     \
-  requires(Lhs::out_channels == 1) && (Rhs::out_channels == 1) struct Name                                             \
-    : BlockBase<Name<Lhs, Rhs>, Lhs::in_channels + Rhs::in_channels, 1> {                                              \
-    constexpr Name(Lhs l, Rhs r) : lhs(l), rhs(r) {}                                                                   \
-    Lhs lhs;                                                                                                           \
-    Rhs rhs;                                                                                                           \
-  };                                                                                                                   \
-                                                                                                                       \
-  template<typename Lhs, typename Rhs>                                                                                 \
-  Name(Lhs, Rhs) -> Name<std::decay_t<Lhs>, std::decay_t<Rhs>>;                                                        \
-                                                                                                                       \
-  template<typename Lhs, typename Rhs>                                                                                 \
-  constexpr auto operator Operator(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)                    \
-  {                                                                                                                    \
-    return Name(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));                                                       \
-  }                                                                                                                    \
-                                                                                                                       \
-  template<ABlock Lhs, ABlock Rhs>                                                                                     \
-  struct evaluator<Name<Lhs, Rhs>> {                                                                                   \
-    constexpr evaluator(const Name<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}                             \
-    constexpr AudioFrame<1> eval(AudioFrame<Name<Lhs, Rhs>::in_channels> in)                                           \
-    {                                                                                                                  \
-      float l = lhs_.eval(splice<0, Lhs::in_channels>(in));                                                            \
-      float r = rhs_.eval(splice<Lhs::in_channels, -1>(in));                                                           \
-      return {l Operator r};                                                                                           \
-    }                                                                                                                  \
-                                                                                                                       \
-  private:                                                                                                             \
-    evaluator<Lhs> lhs_;                                                                                               \
-    evaluator<Rhs> rhs_;                                                                                               \
+  template<typename Func, std::size_t InChannels>
+  struct FunBlock : BlockBase<FunBlock<Func, InChannels>,
+                              InChannels,
+                              std::invoke_result_t<Func, AudioFrame<InChannels>>::channels()> {
+    Func func;
   };
 
-  EDA_DEFINE_BLOCK_BINOP(Plus, +)
-  EDA_DEFINE_BLOCK_BINOP(Minus, -)
-  EDA_DEFINE_BLOCK_BINOP(Times, *)
-  EDA_DEFINE_BLOCK_BINOP(Division, /)
+  template<typename Func, std::size_t InChannels>
+  struct evaluator<FunBlock<Func, InChannels>> {
+    constexpr evaluator(const FunBlock<Func, InChannels>& block) : func_(block.func) {}
+
+    constexpr auto eval(AudioFrame<InChannels> in)
+    {
+      return func_(in);
+    }
+
+  private:
+    Func func_;
+  };
+
+  template<std::size_t InChannels>
+  constexpr auto block(auto&& func)
+  {
+    return FunBlock<std::remove_cvref_t<decltype(func)>, InChannels>{{}, FWD(func)};
+  }
+
+  constexpr auto plus = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] + in[1]); });
+  constexpr auto minus = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] - in[1]); });
+  constexpr auto times = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] * in[1]); });
+  constexpr auto divide = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] / in[1]); });
+  constexpr auto equals = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] == in[1] ? 1.f : 0.f); });
+  constexpr auto compare = block<2>([](AudioFrame<2> in) {
+    auto res = in[0] <=> in[1];
+    if (res < 0) return AudioFrame(-1.f);
+    if (res > 0) return AudioFrame(1.f);
+    return AudioFrame(0.f);
+  });
+
+  using Plus = std::remove_cvref_t<decltype(plus)>;
+  using Minus = std::remove_cvref_t<decltype(minus)>;
+  using Times = std::remove_cvref_t<decltype(times)>;
+  using Divide = std::remove_cvref_t<decltype(divide)>;
+  using Equals = std::remove_cvref_t<decltype(equals)>;
+  using Compare = std::remove_cvref_t<decltype(compare)>;
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator+(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return (lhs, rhs) | plus;
+  }
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator-(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return (lhs, rhs) | minus;
+  }
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator*(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return (lhs, rhs) | times;
+  }
+
+  template<typename Lhs, typename Rhs>
+  constexpr auto operator/(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  {
+    return (lhs, rhs) | divide;
+  }
 
   // RECURSIVE /////////////////////////////////////////
 
@@ -566,14 +599,17 @@ namespace topisani::eda {
   };
 
   // MEM ///////////////////////////////////////////////
-   
-  struct Mem : BlockBase<Mem, 1, 1> {};
-  constexpr Mem mem;
+
+  template<std::size_t Samples = 1>
+  struct Mem : BlockBase<Mem<Samples>, 1, 1> {};
+
+  template<std::size_t Samples = 1>
+  constexpr Mem<Samples> mem;
 
   template<>
-  struct evaluator<Mem> {
-    constexpr evaluator(const Mem&) {}
-    constexpr AudioFrame<Mem::out_channels> eval(AudioFrame<Mem::in_channels> in)
+  struct evaluator<Mem<1>> {
+    constexpr evaluator(const Mem<1>&) {}
+    constexpr AudioFrame<1> eval(AudioFrame<1> in)
     {
       auto res = memory_;
       memory_ = in;
@@ -581,6 +617,64 @@ namespace topisani::eda {
     }
 
     AudioFrame<1> memory_;
+  };
+
+  template<>
+  struct evaluator<Mem<0>> {
+    constexpr evaluator(const Mem<0>&) {}
+    constexpr AudioFrame<1> eval(AudioFrame<1> in)
+    {
+      return in;
+    }
+  };
+
+  template<std::size_t Samples>
+  struct evaluator<Mem<Samples>> {
+    constexpr evaluator(const Mem<Samples>&) {}
+    constexpr AudioFrame<1> eval(AudioFrame<1> in)
+    {
+      float res = memory_[index_];
+      memory_[index_] = in;
+      index_++;
+      index_ %= Samples;
+      return res;
+    }
+
+    std::array<float, Samples> memory_ = {};
+    std::ptrdiff_t index_ = 0;
+  };
+
+  // DELAY /////////////////////////////////////////////
+
+  struct Delay : BlockBase<Delay, 2, 1> {};
+  constexpr Delay delay;
+
+  template<>
+  struct evaluator<Delay> {
+    evaluator(const Delay&) {}
+    AudioFrame<Delay::out_channels> eval(AudioFrame<Delay::in_channels> in)
+    {
+      auto delay = static_cast<int>(in[0]);
+      if (auto old_size = memory_.size(); old_size < delay) {
+        memory_.resize(delay);
+        auto src = memory_.begin() + old_size - 1;
+        auto dst = memory_.begin() + delay - 1;
+        auto n = old_size - index_;
+        for (int i = 0; i < n; i++, src--, dst--) {
+          *dst = *src;
+          *src = 0;
+        }
+      }
+      float res = memory_[(memory_.size() + index_ - delay) % memory_.size()];
+      memory_[index_] = in[1];
+      index_++;
+      index_ %= static_cast<std::ptrdiff_t>(memory_.size());
+      return res;
+    }
+
+  private:
+    std::vector<float> memory_;
+    std::ptrdiff_t index_ = 0;
   };
 
 } // namespace topisani::eda

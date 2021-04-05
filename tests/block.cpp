@@ -90,11 +90,61 @@ namespace topisani::eda {
   TEST_EXPR((1_eda, 2), (), (1, 2))
   TEST_EXPR((1, 2_eda), (), (1, 2))
 
-  TEST_CASE ("mem") {
-    auto e = make_evaluator(mem);
+  TEST_CASE ("mem<1>") {
+    auto e = make_evaluator(mem<1>);
     REQUIRE(e.eval({1}) == AudioFrame(0));
     REQUIRE(e.eval({2}) == AudioFrame(1));
     REQUIRE(e.eval({3}) == AudioFrame(2));
+  }
+
+  TEST_CASE ("mem<5>") {
+    auto e = make_evaluator(mem<5>);
+    REQUIRE(e.eval({1}) == AudioFrame(0));
+    REQUIRE(e.eval({2}) == AudioFrame(0));
+    REQUIRE(e.eval({3}) == AudioFrame(0));
+    REQUIRE(e.eval({4}) == AudioFrame(0));
+    REQUIRE(e.eval({5}) == AudioFrame(0));
+    REQUIRE(e.eval({6}) == AudioFrame(1));
+    REQUIRE(e.eval({7}) == AudioFrame(2));
+    REQUIRE(e.eval({8}) == AudioFrame(3));
+    REQUIRE(e.eval({9}) == AudioFrame(4));
+    REQUIRE(e.eval({10}) == AudioFrame(5));
+    REQUIRE(e.eval({11}) == AudioFrame(6));
+  }
+
+  TEST_CASE ("delay") {
+    auto e = make_evaluator(delay);
+    REQUIRE(e.eval({5, 1}) == AudioFrame(0));
+    REQUIRE(e.eval({5, 2}) == AudioFrame(0));
+    REQUIRE(e.eval({5, 3}) == AudioFrame(0));
+    REQUIRE(e.eval({5, 4}) == AudioFrame(0));
+    REQUIRE(e.eval({5, 5}) == AudioFrame(0));
+    REQUIRE(e.eval({5, 6}) == AudioFrame(1));
+    REQUIRE(e.eval({5, 7}) == AudioFrame(2));
+    REQUIRE(e.eval({5, 8}) == AudioFrame(3));
+    REQUIRE(e.eval({5, 9}) == AudioFrame(4));
+    REQUIRE(e.eval({5, 10}) == AudioFrame(5));
+    REQUIRE(e.eval({5, 11}) == AudioFrame(6));
+    // Change delay while running
+    REQUIRE(e.eval({2, 12}) == AudioFrame(10));
+    REQUIRE(e.eval({2, 13}) == AudioFrame(11));
+    REQUIRE(e.eval({2, 14}) == AudioFrame(12));
+    REQUIRE(e.eval({3, 15}) == AudioFrame(12));
+    REQUIRE(e.eval({4, 16}) == AudioFrame(12));
+    REQUIRE(e.eval({5, 17}) == AudioFrame(12));
+    REQUIRE(e.eval({6, 18}) == AudioFrame(0));
+    REQUIRE(e.eval({6, 19}) == AudioFrame(13));
+    REQUIRE(e.eval({8, 20}) == AudioFrame(0));
+    REQUIRE(e.eval({8, 21}) == AudioFrame(0));
+    REQUIRE(e.eval({8, 22}) == AudioFrame(14));
+    REQUIRE(e.eval({8, 23}) == AudioFrame(15));
+    REQUIRE(e.eval({8, 24}) == AudioFrame(16));
+    REQUIRE(e.eval({8, 25}) == AudioFrame(17));
+    REQUIRE(e.eval({8, 26}) == AudioFrame(18));
+    REQUIRE(e.eval({8, 27}) == AudioFrame(19));
+    REQUIRE(e.eval({8, 28}) == AudioFrame(20));
+    REQUIRE(e.eval({8, 29}) == AudioFrame(21));
+    REQUIRE(e.eval({8, 30}) == AudioFrame(22));
   }
 
 } // namespace topisani::eda
