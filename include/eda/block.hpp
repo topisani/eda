@@ -1,570 +1,45 @@
 #pragma once
+
 #include <algorithm>
 #include <ranges>
 #include <span>
 
-#include "eda/expr2.hpp"
+#include "eda/internal/util.hpp"
 
 namespace topisani::eda {
 
-  /// The basic data type used for audio samples and other real numbers.
-  /// Hardcoded to float here for simplicity, but all types could have it
-  /// as a template parameter.
-  using real = float;
-
-  /// A non-owning buffer of audio.
-  template<std::size_t Channels>
-  struct AudioBuffer {
-    /// Constructor that does not require explicit conversion to span first
-    /// Takes a `contiguous_range` of `real`, and constructs the internal span
-    /// with it
-    template<std::ranges::contiguous_range Range>
-    requires(std::is_same_v<std::ranges::range_value_t<Range>, real>) //
-      AudioBuffer(Range&& data)
-    noexcept // NOLINT
-      : data_(std::forward<Range>(data))
-    {}
-
-    /// Get the begin iterator
-    auto begin() noexcept
-    {
-      return data_.begin();
-    }
-
-    /// Get the end iterator
-    auto end() noexcept
-    {
-      return data_.end();
-    }
-
-  private:
-    std::span<real> data_;
-  };
-
-  template<std::size_t Channels>
-  struct AudioFrame {
-    constexpr AudioFrame() = default;
-    constexpr AudioFrame(std::array<float, Channels> data) : data_(data) {}
-    constexpr AudioFrame(auto... floats) requires(sizeof...(floats) == Channels &&
-                                                  (std::convertible_to<decltype(floats), float> && ...))
-      : data_{static_cast<float>(floats)...}
-    {}
-
-    static constexpr std::size_t size()
-    {
-      return Channels;
-    }
-    static constexpr std::size_t channels()
-    {
-      return Channels;
-    }
-
-    [[nodiscard]] constexpr auto begin() const noexcept
-    {
-      return data_.begin();
-    }
-    [[nodiscard]] constexpr auto end() const noexcept
-    {
-      return data_.end();
-    }
-
-    constexpr auto begin()
-    {
-      return data_.begin();
-    }
-    constexpr auto end()
-    {
-      return data_.end();
-    }
-
-    constexpr float& operator[](std::size_t Idx)
-    {
-      return data_[Idx];
-    }
-
-    constexpr float* data()
-    {
-      return data_.data();
-    }
-
-    operator float&() //
-      requires(size() == 1)
-    {
-      return data_[0];
-    }
-
-    constexpr bool operator==(const AudioFrame&) const noexcept = default;
-    constexpr bool operator==(float f) const noexcept //
-      requires(size() == 1)
-    {
-      return data_[0] == f;
-    }
-
-  private : //
-            std::array<float, Channels>
-              data_ = {0};
-  };
-
-  template<>
-  struct AudioFrame<0> {
-    constexpr AudioFrame() = default;
-    static constexpr std::size_t size()
-
-    // PARALLEL //////////////////////////////////////////
-    {
-      return 0;
-    }
-    static constexpr std::size_t channels()
-    {
-      return 0;
-    }
-
-    static constexpr float* begin()
-    {
-      return nullptr;
-    }
-    static constexpr float* end()
-    {
-      return nullptr;
-    }
-
-    static constexpr float* data()
-    {
-      return nullptr;
-    }
-
-    constexpr bool operator==(const AudioFrame&) const noexcept = default;
-  };
-
-  template<std::size_t N>
-  AudioFrame(std::array<float, N> arr) -> AudioFrame<N>;
-
-  AudioFrame(auto... floats) -> AudioFrame<sizeof...(floats)>;
-
-  template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
-  requires(Begin >= 0 && ((End >= Begin && End <= Channels))) //
-    constexpr auto splice(const AudioFrame<Channels>& in)
-  {
-    AudioFrame<End - Begin> res;
-    std::copy(in.begin() + Begin, in.begin() + End, res.begin());
-    return res;
-  }
-
-  template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
-  requires(Begin >= 0 && End < 0 && (Channels + End + 1) >= Begin) //
-    constexpr auto splice(const AudioFrame<Channels>& in)          //
-  {
-    return splice<Begin, Channels + End + 1, Channels>(in);
-  }
-
-  template<std::size_t S1, std::size_t S2>
-  constexpr auto concat(const AudioFrame<S1>& x1, const AudioFrame<S2>& x2) -> AudioFrame<S1 + S2>
-  {
-    AudioFrame<S1 + S2> res;
-    auto b2 = std::copy(x1.begin(), x1.end(), res.begin());
-    std::copy(x2.begin(), x2.end(), b2);
-    return res;
-  }
-
-  template<std::size_t S1, std::size_t... Sizes>
-  constexpr auto concat(const AudioFrame<S1>& x, const AudioFrame<Sizes>&... xs) -> AudioFrame<S1 + (Sizes + ...)>
-  {
-    return concat(x, concat(xs...));
-  }
-
-  template<typename T, std::size_t InChannels, std::size_t OutChannels>
-  concept AnAudioProcessor = requires(T t, AudioBuffer<InChannels> in, AudioBuffer<OutChannels> out)
-  {
-    t.process(in, out);
-  };
-
   // BLOCK /////////////////////////////////////////////
 
+  /// CRTP Base class of all blocks.
+  ///
+  /// Provides `in_channels` and `out_channels` constants, as well as
+  /// the call operator for currying.
   template<typename Derived, std::size_t InChannels, std::size_t OutChannels>
   struct BlockBase {
     static constexpr std::size_t in_channels = InChannels;
     static constexpr std::size_t out_channels = OutChannels;
 
-    constexpr auto operator()(auto&&... inputs) const requires(sizeof...(inputs) <= InChannels);
+    constexpr auto operator()(auto&&... inputs) const //
+      requires(sizeof...(inputs) <= InChannels);
   };
 
+  /// The basic concept of a block
   template<typename T>
-  concept ABlock =                                            //
-    util::decays_to<decltype(T::in_channels), std::size_t> && //
-    util::decays_to<decltype(T::in_channels), std::size_t> &&
-    std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
+  concept ABlock = std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
 
+  /// A type that may be a reference to `ABlock`
   template<typename T>
   concept ABlockRef = ABlock<std::remove_cvref_t<T>>;
 
-  // EVALUATOR /////////////////////////////////////////
-
-  template<typename T>
-  struct evaluator;
-
-  template<typename T>
-  struct processor;
-
-  constexpr auto make_processor(ABlockRef auto&& b)
-  {
-    return processor<std::decay_t<decltype(b)>>(b);
-  }
-
-  constexpr auto make_evaluator(ABlockRef auto&& b)
-  {
-    return evaluator<std::decay_t<decltype(b)>>(b);
-  }
-
-  template<ABlock Block>
-  constexpr auto eval(Block block, AudioFrame<Block::in_channels> in)
-  {
-    return make_evaluator(block).eval(in);
-  }
-
-  // LITERAL ///////////////////////////////////////////
-
-  struct Literal : BlockBase<Literal, 0, 1> {
-    float value;
-  };
-
-  constexpr decltype(auto) wrap_literal(ABlockRef auto&& input)
-  {
-    return FWD(input);
-  }
-
-  constexpr Literal wrap_literal(float f)
-  {
-    return Literal{{}, f};
-  }
-
-  template<typename T>
-  using wrapped_t = std::remove_cvref_t<decltype(wrap_literal(std::declval<T>()))>;
-
-  template<>
-  struct evaluator<Literal> {
-    constexpr evaluator(Literal l) : literal_(l) {}
-
-    constexpr AudioFrame<1> eval(AudioFrame<0>)
-    {
-      return {{literal_.value}};
-    }
-
-    Literal literal_;
-  };
-
-  namespace literals {
-    constexpr Literal operator"" _eda(long double f)
-    {
-      return wrap_literal(f);
-    }
-    constexpr Literal operator"" _eda(unsigned long long f)
-    {
-      return wrap_literal(f);
-    }
-  } // namespace literals
-
-  // CURRYING //////////////////////////////////////////
-
-  template<ABlock Block, ABlock Input>
-  requires(Input::out_channels <= Block::in_channels) //
-    struct Curry : BlockBase<Curry<Block, Input>,
-                             Input::in_channels + Block::in_channels - Input::out_channels,
-                             Block::out_channels> {
-    constexpr Curry(Block b, Input input) : block(b), input(input) {}
-
-    Block block;
-    Input input;
-  };
-
-  template<ABlock Block, ABlock Input>
-  struct evaluator<Curry<Block, Input>> {
-    constexpr evaluator(const Curry<Block, Input>& block) : block_(block.block), input_(block.input) {}
-
-    constexpr AudioFrame<Curry<Block, Input>::out_channels> eval(AudioFrame<Curry<Block, Input>::in_channels> in)
-    {
-      return block_.eval(concat(input_.eval(splice<0, Input::in_channels>(in)), splice<Input::in_channels, -1>(in)));
-    }
-
-  private:
-    evaluator<Block> block_;
-    evaluator<Input> input_;
-  };
-
-  template<typename D, std::size_t I, std::size_t O>
-  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) const requires(sizeof...(inputs) <= I)
-  {
-    auto joined = (wrap_literal(FWD(inputs)), ...);
-    return Curry<D, decltype(joined)>(static_cast<const D&>(*this), std::move(joined));
-  }
-
-  // IDENT /////////////////////////////////////////////
-
-  struct Ident : BlockBase<Ident, 1, 1> {};
-  static_assert(ABlock<Ident>);
-
-  constexpr Ident ident;
-  namespace literals {
-    constexpr Ident _ = ident;
-  }
-
-  template<>
-  struct processor<Ident> {
-    constexpr processor(Ident){};
-    static void process(AudioBuffer<1> input, AudioBuffer<1> output)
-    {
-      std::ranges::copy(input, output.begin());
-    }
-  };
-
-  template<>
-  struct evaluator<Ident> {
-    constexpr evaluator(Ident){};
-    static AudioFrame<1> eval(AudioFrame<1> in)
-    {
-      return in;
-    }
-  };
-
-  // CUT ///////////////////////////////////////////////
-
-  struct Cut : BlockBase<Cut, 1, 0> {};
-
-  constexpr Cut cut;
-
-  template<>
-  struct evaluator<Cut> {
-    constexpr evaluator(Cut) {}
-    static AudioFrame<0> eval(AudioFrame<1>)
-    {
-      return {};
-    }
-  };
-
-  // PARALLEL //////////////////////////////////////////
-
-  template<ABlock Lhs, ABlock Rhs>
-  struct Parallel
-    : BlockBase<Parallel<Lhs, Rhs>, Lhs::in_channels + Rhs::in_channels, Lhs::out_channels + Rhs::out_channels> {
-    constexpr Parallel(Lhs l, Rhs r) : lhs(l), rhs(r) {}
-    Lhs lhs;
-    Rhs rhs;
-  };
-
-  template<typename Lhs, typename Rhs>
-  Parallel(Lhs, Rhs) -> Parallel<std::decay_t<Lhs>, std::decay_t<Rhs>>;
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator,(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return Parallel(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
-  }
-
-  template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Parallel<Lhs, Rhs>> {
-    constexpr evaluator(const Parallel<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-
-    constexpr AudioFrame<Parallel<Lhs, Rhs>::out_channels> eval(AudioFrame<Parallel<Lhs, Rhs>::in_channels> in)
-    {
-      auto l = lhs_.eval(splice<0, Lhs::in_channels>(in));
-      auto r = rhs_.eval(splice<Lhs::in_channels, -1>(in));
-      return concat(l, r);
-    }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
-  };
-
-  // SERIAL ////////////////////////////////////////////
-
-  template<ABlock Lhs, ABlock Rhs>
-  requires(Lhs::out_channels == Rhs::in_channels) //
-    struct Serial : BlockBase<Serial<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
-    constexpr Serial(Lhs l, Rhs r) : lhs(l), rhs(r) {}
-    Lhs lhs;
-    Rhs rhs;
-  };
-
-  template<typename Lhs, typename Rhs>
-  Serial(Lhs, Rhs) -> Serial<std::decay_t<Lhs>, std::decay_t<Rhs>>;
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator|(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    // static_assert(std::decay_t<Lhs>::out_channels == std::decay_t<Rhs>::in_channels,
-    //               "Serial operator requires Out channels of left hand side to equal in channels of right hand side");
-    //               //
-    return Serial(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
-  }
-
-  template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Serial<Lhs, Rhs>> {
-    constexpr evaluator(const Serial<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-
-    constexpr AudioFrame<Serial<Lhs, Rhs>::out_channels> eval(AudioFrame<Serial<Lhs, Rhs>::in_channels> in)
-    {
-      auto l = lhs_.eval(in);
-      return rhs_.eval(l);
-    }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
-  };
-
-  // Split /////////////////////////////////////////////
-
-  template<ABlock Lhs, ABlock Rhs>
-  requires(Rhs::in_channels % Lhs::out_channels == 0) //
-    struct Split : BlockBase<Split<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
-    constexpr Split(Lhs l, Rhs r) : lhs(l), rhs(r) {}
-    Lhs lhs;
-    Rhs rhs;
-  };
-
-  template<typename Lhs, typename Rhs>
-  Split(Lhs, Rhs) -> Split<std::decay_t<Lhs>, std::decay_t<Rhs>>;
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator<<(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return Split(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
-  }
-
-  template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Split<Lhs, Rhs>> {
-    constexpr evaluator(const Split<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-
-    constexpr AudioFrame<Split<Lhs, Rhs>::out_channels> eval(AudioFrame<Split<Lhs, Rhs>::in_channels> in)
-    {
-      auto l = lhs_.eval(in);
-      AudioFrame<Rhs::in_channels> rhs_in;
-      for (std::size_t i = 0; i < rhs_in.channels(); i++) {
-        rhs_in[i] = l[i % l.channels()];
-      }
-      return rhs_.eval(rhs_in);
-    }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
-  };
-
-  // MERGE /////////////////////////////////////////////
-
-  template<ABlock Lhs, ABlock Rhs>
-  requires(Lhs::out_channels % Rhs::in_channels == 0) //
-    struct Merge : BlockBase<Merge<Lhs, Rhs>, Lhs::in_channels, Rhs::out_channels> {
-    constexpr Merge(Lhs l, Rhs r) : lhs(l), rhs(r) {}
-    Lhs lhs;
-    Rhs rhs;
-  };
-
-  template<typename Lhs, typename Rhs>
-  Merge(Lhs, Rhs) -> Merge<std::decay_t<Lhs>, std::decay_t<Rhs>>;
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator>>(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return Merge(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
-  }
-
-  template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Merge<Lhs, Rhs>> {
-    constexpr evaluator(const Merge<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-
-    constexpr AudioFrame<Merge<Lhs, Rhs>::out_channels> eval(AudioFrame<Merge<Lhs, Rhs>::in_channels> in)
-    {
-      auto lhs_out = lhs_.eval(in);
-      AudioFrame<Rhs::in_channels> rhs_in;
-      for (std::size_t i = 0; i < lhs_out.channels(); i++) {
-        rhs_in[i % rhs_in.channels()] += lhs_out[i];
-      }
-      return rhs_.eval(rhs_in);
-    }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
-  };
-
-  // ARITHMETIC ////////////////////////////////////////
-
-  template<typename Func, std::size_t InChannels>
-  struct FunBlock : BlockBase<FunBlock<Func, InChannels>,
-                              InChannels,
-                              std::invoke_result_t<Func, AudioFrame<InChannels>>::channels()> {
-    Func func;
-  };
-
-  template<typename Func, std::size_t InChannels>
-  struct evaluator<FunBlock<Func, InChannels>> {
-    constexpr evaluator(const FunBlock<Func, InChannels>& block) : func_(block.func) {}
-
-    constexpr auto eval(AudioFrame<InChannels> in)
-    {
-      return func_(in);
-    }
-
-  private:
-    Func func_;
-  };
-
-  template<std::size_t InChannels>
-  constexpr auto block(auto&& func)
-  {
-    return FunBlock<std::remove_cvref_t<decltype(func)>, InChannels>{{}, FWD(func)};
-  }
-
-  constexpr auto plus = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] + in[1]); });
-  constexpr auto minus = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] - in[1]); });
-  constexpr auto times = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] * in[1]); });
-  constexpr auto divide = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] / in[1]); });
-  constexpr auto equals = block<2>([](AudioFrame<2> in) { return AudioFrame(in[0] == in[1] ? 1.f : 0.f); });
-  constexpr auto compare = block<2>([](AudioFrame<2> in) {
-    auto res = in[0] <=> in[1];
-    if (res < 0) return AudioFrame(-1.f);
-    if (res > 0) return AudioFrame(1.f);
-    return AudioFrame(0.f);
-  });
-
-  using Plus = std::remove_cvref_t<decltype(plus)>;
-  using Minus = std::remove_cvref_t<decltype(minus)>;
-  using Times = std::remove_cvref_t<decltype(times)>;
-  using Divide = std::remove_cvref_t<decltype(divide)>;
-  using Equals = std::remove_cvref_t<decltype(equals)>;
-  using Compare = std::remove_cvref_t<decltype(compare)>;
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator+(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return (lhs, rhs) | plus;
-  }
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator-(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return (lhs, rhs) | minus;
-  }
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator*(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return (lhs, rhs) | times;
-  }
-
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator/(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
-  {
-    return (lhs, rhs) | divide;
-  }
-
-  // RECURSIVE /////////////////////////////////////////
-
+  /// Number of input channels for block
+  template<ABlockRef T>
+  constexpr auto ins = std::remove_cvref_t<T>::in_channels;
+
+  /// Number of output channels for block
+  template<ABlockRef T>
+  constexpr auto outs = std::remove_cvref_t<T>::out_channels;
+
+  /// Helper class for modeling Binary operators
   template<typename D, ABlock Lhs, ABlock Rhs, std::size_t In, std::size_t Out>
   struct BinOp : BlockBase<D, In, Out> {
     constexpr BinOp(Lhs l, Rhs r) : lhs(l), rhs(r) {}
@@ -572,109 +47,181 @@ namespace topisani::eda {
     Rhs rhs;
   };
 
-  template<ABlock Lhs, ABlock Rhs>
-  requires(Rhs::in_channels <= Lhs::out_channels) && (Rhs::out_channels <= Lhs::in_channels) //
-    struct Recursive : BinOp<Recursive<Lhs, Rhs>, Lhs, Rhs, Lhs::in_channels - Rhs::out_channels, Lhs::out_channels> {};
+  // LITERAL ///////////////////////////////////////////
 
-  template<typename Lhs, typename Rhs>
-  constexpr auto operator%(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  /// A block that models a literal/constant value
+  struct Literal : BlockBase<Literal, 0, 1> {
+    float value;
+  };
+
+  /// Wrap a value in `Literal` if it is not already a block
+  constexpr decltype(auto) wrap_literal(ABlockRef auto&& input)
   {
-    return Recursive<wrapped_t<Lhs>, wrapped_t<Rhs>>{{wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs))}};
+    return FWD(input);
   }
 
-  template<ABlock Lhs, ABlock Rhs>
-  struct evaluator<Recursive<Lhs, Rhs>> {
-    constexpr evaluator(const Recursive<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-    constexpr AudioFrame<Recursive<Lhs, Rhs>::out_channels> eval(AudioFrame<Recursive<Lhs, Rhs>::in_channels> in)
-    {
-      auto l_out = lhs_.eval(concat(memory_, in));
-      memory_ = rhs_.eval(splice<0, Rhs::in_channels>(l_out));
-      return l_out;
-    }
+  /// Wrap a value in `Literal` if it is not already a block
+  constexpr Literal wrap_literal(float f)
+  {
+    return Literal{{}, f};
+  }
 
-  private:
-    AudioFrame<Rhs::out_channels> memory_;
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
+  /// The result of calling `wrap_literal`
+  template<typename T>
+  using wrapped_t = std::remove_cvref_t<decltype(wrap_literal(std::declval<T>()))>;
+
+  // CURRYING //////////////////////////////////////////
+
+  /// Block used to capture parameters when calling blocks as functions
+  template<ABlock Block, ABlock Input>
+  requires(outs<Input> <= ins<Block>) //
+    struct Partial : BlockBase<Partial<Block, Input>, ins<Input> + ins<Block> - outs<Input>, outs<Block>> {
+    constexpr Partial(Block b, Input input) : block(b), input(input) {}
+
+    Block block;
+    Input input;
   };
+
+  /// Call operator of BlockBase. Pass parameters as input signals
+  ///
+  /// Allows currying/partial application of parameters. Parameters will be
+  /// sent as inputs from left to right.
+  template<typename D, std::size_t I, std::size_t O>
+  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) const //
+    requires(sizeof...(inputs) <= I)
+  {
+    auto joined = parallel(wrap_literal(FWD(inputs))...);
+    return Partial<D, decltype(joined)>(static_cast<const D&>(*this), std::move(joined));
+  }
+
+  // IDENT /////////////////////////////////////////////
+
+  /// Identity block. Returns its input unchanged
+  struct Ident : BlockBase<Ident, 1, 1> {};
+  /// The identity block.
+  constexpr Ident ident;
+
+  // CUT ///////////////////////////////////////////////
+
+  /// Cut block. Ends a signal path and discards its input
+  struct Cut : BlockBase<Cut, 1, 0> {};
+  /// The cut block.
+  constexpr Cut cut;
+
+  // PARALLEL //////////////////////////////////////////
+
+  /// Parallel composition block.
+  ///
+  /// Given input `(x0, x1)` and blocks `l, r`, outputs `(l(x0), r(x1))`
+  template<ABlock Lhs, ABlock Rhs>
+  struct Parallel : BinOp<Parallel<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> + ins<Rhs>, outs<Lhs> + outs<Rhs>> {};
+
+  /// The parallel composition of two blocks.
+  template<ABlockRef Lhs, ABlockRef Rhs>
+  constexpr auto parallel(Lhs&& lhs, Rhs&& rhs)
+  {
+    return Parallel<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // SEQUENTIAL ////////////////////////////////////////
+
+  /// Sequential composition block.
+  ///
+  /// Given input `x0` and blocks `l, r`, outputs `r(l(x0))`
+  template<ABlock Lhs, ABlock Rhs>
+  requires(outs<Lhs> == ins<Rhs>) //
+    struct Sequential : BinOp<Sequential<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+
+  /// The sequential composition of two blocks.
+  template<ABlockRef Lhs, ABlockRef Rhs>
+  constexpr auto sequential(Lhs&& lhs, Rhs&& rhs)
+  {
+    return Sequential<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // RECURSIVE /////////////////////////////////////////
+
+  /// Recursive composition block.
+  ///
+  /// Given input `x` and blocks `l, r`, outputs `l(r(x'), x)`, where `x'` is the output
+  /// of the previous evaluation.
+  template<ABlock Lhs, ABlock Rhs>
+  requires(ins<Rhs> <= outs<Lhs>) && (outs<Rhs> <= ins<Lhs>) //
+    struct Recursive : BinOp<Recursive<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> - outs<Rhs>, outs<Lhs>> {};
+
+  /// The recursive composition of two blocks
+  template<ABlockRef Lhs, ABlockRef Rhs>
+  constexpr auto recursive(Lhs&& lhs, Rhs&& rhs)
+  {
+    return Recursive<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // Split /////////////////////////////////////////////
+
+  /// Split composition block.
+  ///
+  /// Given two blocks `l, r`, applies `l`, and passes the output to `r`, repeating the signals
+  /// to fit the arity of `r`.
+  template<ABlock Lhs, ABlock Rhs>
+  requires(ins<Rhs> % outs<Lhs> == 0) //
+    struct Split : BinOp<Split<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+
+  /// The split composition of two blocks.
+  template<ABlockRef Lhs, ABlockRef Rhs>
+  constexpr auto split(Lhs&& lhs, Rhs&& rhs)
+  {
+    return Split<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // MERGE /////////////////////////////////////////////
+
+  /// Merge composition block.
+  ///
+  /// Given two blocks `l, r`, applies `l`, and passes the output to `r`, such that each
+  /// input to `r` is the sum of all `l(x)[i mod ins<r>]`.
+  template<ABlock Lhs, ABlock Rhs>
+  requires(outs<Lhs> % ins<Rhs> == 0) //
+    struct Merge : BinOp<Merge<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+
+  /// The merge composition of two blocks.
+  template<ABlockRef Lhs, ABlockRef Rhs>
+  constexpr auto merge(Lhs&& lhs, Rhs&& rhs)
+  {
+    return Merge<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // ARITHMETIC ////////////////////////////////////////
+
+  /// A simple block that calculates the sum of its two inputs
+  struct Plus : BlockBase<Plus, 2, 1> {};
+  constexpr Plus plus;
+  /// A simple block that calculates the difference between its two inputs
+  struct Minus : BlockBase<Minus, 2, 1> {};
+  constexpr Minus minus;
+  /// A simple block that calculates the multiple of its two inputs
+  struct Times : BlockBase<Times, 2, 1> {};
+  constexpr Times times;
+  /// A simple block that calculates the ratio between its two inputs
+  struct Divide : BlockBase<Divide, 2, 1> {};
+  constexpr Divide divide;
 
   // MEM ///////////////////////////////////////////////
 
+  /// Fixed size memory block.
+  ///
+  /// Outputs its input delayed by n samples
   template<std::size_t Samples = 1>
   struct Mem : BlockBase<Mem<Samples>, 1, 1> {};
 
   template<std::size_t Samples = 1>
   constexpr Mem<Samples> mem;
 
-  template<>
-  struct evaluator<Mem<1>> {
-    constexpr evaluator(const Mem<1>&) {}
-    constexpr AudioFrame<1> eval(AudioFrame<1> in)
-    {
-      auto res = memory_;
-      memory_ = in;
-      return res;
-    }
-
-    AudioFrame<1> memory_;
-  };
-
-  template<>
-  struct evaluator<Mem<0>> {
-    constexpr evaluator(const Mem<0>&) {}
-    constexpr AudioFrame<1> eval(AudioFrame<1> in)
-    {
-      return in;
-    }
-  };
-
-  template<std::size_t Samples>
-  struct evaluator<Mem<Samples>> {
-    constexpr evaluator(const Mem<Samples>&) {}
-    constexpr AudioFrame<1> eval(AudioFrame<1> in)
-    {
-      float res = memory_[index_];
-      memory_[index_] = in;
-      index_++;
-      index_ %= Samples;
-      return res;
-    }
-
-    std::array<float, Samples> memory_ = {};
-    std::ptrdiff_t index_ = 0;
-  };
-
   // DELAY /////////////////////////////////////////////
 
+  /// Variable size memory block.
+  ///
+  /// Given input signals `(d, x)`, outputs `x` delayed by `d` samples
   struct Delay : BlockBase<Delay, 2, 1> {};
   constexpr Delay delay;
-
-  template<>
-  struct evaluator<Delay> {
-    evaluator(const Delay&) {}
-    AudioFrame<Delay::out_channels> eval(AudioFrame<Delay::in_channels> in)
-    {
-      auto delay = static_cast<int>(in[0]);
-      if (auto old_size = memory_.size(); old_size < delay) {
-        memory_.resize(delay);
-        auto src = memory_.begin() + old_size - 1;
-        auto dst = memory_.begin() + delay - 1;
-        auto n = old_size - index_;
-        for (int i = 0; i < n; i++, src--, dst--) {
-          *dst = *src;
-          *src = 0;
-        }
-      }
-      float res = memory_[(memory_.size() + index_ - delay) % memory_.size()];
-      memory_[index_] = in[1];
-      index_++;
-      index_ %= static_cast<std::ptrdiff_t>(memory_.size());
-      return res;
-    }
-
-  private:
-    std::vector<float> memory_;
-    std::ptrdiff_t index_ = 0;
-  };
 
 } // namespace topisani::eda
