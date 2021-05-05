@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <span>
 
-namespace topisani::eda {
+namespace eda {
 
   template<std::size_t Channels>
   struct Frame {
@@ -177,4 +177,4 @@ namespace topisani::eda {
     t.process(in, out);
   };
 
-} // namespace topisani::eda
+} // namespace eda

@@ -1,25 +1,56 @@
 #pragma once
 
-#include "eda/frame.hpp"
 #include "eda/block.hpp"
+#include "eda/frame.hpp"
 
-namespace topisani::eda {
+namespace eda {
 
   // EVALUATOR /////////////////////////////////////////
 
   template<typename T>
   struct evaluator;
 
-  constexpr auto make_evaluator(ABlockRef auto&& b)
+  template<typename T>
+  struct block_for;
+
+  template<typename T>
+  struct block_for<evaluator<T>> {
+    using type = T;
+  };
+
+  template<typename T>
+  using block_for_t = typename block_for<T>::type;
+
+  constexpr auto make_evaluator(AnyBlockRef auto&& b)
   {
     return evaluator<std::decay_t<decltype(b)>>(b);
   }
 
-  template<ABlock Block>
+  template<AnyBlock Block>
   constexpr auto eval(Block block, Frame<Block::in_channels> in)
   {
     return make_evaluator(block).eval(in);
   }
+
+  template<std::size_t Ins, std::size_t Outs>
+  struct DynEvaluator {
+    template<ABlock<Ins, Outs> Block>
+    DynEvaluator(evaluator<Block> evaluator) : func_([evaluator](Frame<Ins> in) mutable { return evaluator.eval(in); })
+    {}
+
+    Frame<Outs> eval(Frame<Ins> in)
+    {
+      return func_(in);
+    }
+
+    Frame<Outs> operator()(Frame<Ins> in)
+    {
+      return func_(in);
+    }
+
+  private:
+    std::function<Frame<Outs>(Frame<Ins>)> func_;
+  };
 
   // EVALUATOR IMPLEMENTATIONS /////////////////////////
 
@@ -39,18 +70,31 @@ namespace topisani::eda {
 
   // CURRYING //////////////////////////////////////////
 
-  template<ABlock Block, ABlock Input>
-  struct evaluator<Partial<Block, Input>> {
-    constexpr evaluator(const Partial<Block, Input>& block) : block_(block.block), input_(block.input) {}
+  template<AnyBlock Block, AnyBlock... Inputs>
+  struct evaluator<Partial<Block, Inputs...>> {
+    constexpr evaluator(const Partial<Block, Inputs...>& block) : block_(block.block), inputs_(block.inputs) {}
 
-    constexpr Frame<outs<Partial<Block, Input>>> eval(Frame<ins<Partial<Block, Input>>> in)
+    constexpr Frame<outs<Partial<Block, Inputs...>>> eval(Frame<ins<Partial<Block, Inputs...>>> in)
     {
-      return block_.eval(concat(input_.eval(splice<0, ins<Input>>(in)), splice<ins<Input>, -1>(in)));
+      return block_.eval(eval_impl<>(in));
     }
 
   private:
+    template<std::size_t Idx = 0>
+    auto eval_impl(auto in)
+    {
+      if constexpr (Idx == sizeof...(Inputs)) {
+        return in;
+      } else {
+        auto& arg_block = std::get<Idx>(inputs_);
+        constexpr auto arg_ins = ins<block_for_t<std::remove_cvref_t<decltype(arg_block)>>>;
+        auto arg_res = arg_block.eval(splice<0, arg_ins>(in));
+        return concat(arg_res, eval_impl<Idx + 1>(splice<arg_ins, -1>(in)));
+      }
+    }
+
     evaluator<Block> block_;
-    evaluator<Input> input_;
+    std::tuple<evaluator<Inputs>...> inputs_;
   };
 
   // IDENT /////////////////////////////////////////////
@@ -77,7 +121,7 @@ namespace topisani::eda {
 
   // PARALLEL //////////////////////////////////////////
 
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Parallel<Lhs, Rhs>> {
     constexpr evaluator(const Parallel<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
 
@@ -95,7 +139,7 @@ namespace topisani::eda {
 
   // SERIAL ////////////////////////////////////////////
 
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Sequential<Lhs, Rhs>> {
     constexpr evaluator(const Sequential<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
 
@@ -112,7 +156,7 @@ namespace topisani::eda {
 
   // RECURSIVE /////////////////////////////////////////
 
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Recursive<Lhs, Rhs>> {
     constexpr evaluator(const Recursive<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
     constexpr Frame<outs<Recursive<Lhs, Rhs>>> eval(Frame<ins<Recursive<Lhs, Rhs>>> in)
@@ -130,7 +174,7 @@ namespace topisani::eda {
 
   // Split /////////////////////////////////////////////
 
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Split<Lhs, Rhs>> {
     constexpr evaluator(const Split<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
 
@@ -151,7 +195,7 @@ namespace topisani::eda {
 
   // MERGE /////////////////////////////////////////////
 
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Merge<Lhs, Rhs>> {
     constexpr evaluator(const Merge<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
 
@@ -174,31 +218,35 @@ namespace topisani::eda {
 
   template<>
   struct evaluator<Plus> {
-    constexpr evaluator(Plus) {};
-    constexpr static Frame<1> eval(Frame<2> in) {
+    constexpr evaluator(Plus){};
+    constexpr static Frame<1> eval(Frame<2> in)
+    {
       return in[0] + in[1];
     }
   };
 
   template<>
   struct evaluator<Minus> {
-    constexpr evaluator(Minus) {};
-    constexpr static Frame<1> eval(Frame<2> in) {
+    constexpr evaluator(Minus){};
+    constexpr static Frame<1> eval(Frame<2> in)
+    {
       return in[0] - in[1];
     }
   };
 
   template<>
   struct evaluator<Times> {
-    constexpr evaluator(Times) {};
-    constexpr static Frame<1> eval(Frame<2> in) {
+    constexpr evaluator(Times){};
+    constexpr static Frame<1> eval(Frame<2> in)
+    {
       return in[0] * in[1];
     }
   };
   template<>
   struct evaluator<Divide> {
-    constexpr evaluator(Divide) {};
-    constexpr static Frame<1> eval(Frame<2> in) {
+    constexpr evaluator(Divide){};
+    constexpr static Frame<1> eval(Frame<2> in)
+    {
       return in[0] / in[1];
     }
   };
@@ -246,7 +294,7 @@ namespace topisani::eda {
   // DELAY /////////////////////////////////////////////
 
   /// Evaluator for variable sized delay.
-  /// 
+  ///
   /// Memory is implemented as a `std::vector`, and never shrinks
   template<>
   struct evaluator<Delay> {
@@ -275,4 +323,19 @@ namespace topisani::eda {
     std::vector<float> memory_;
     std::ptrdiff_t index_ = 0;
   };
-} // namespace topisani::eda
+
+  // REF ///////////////////////////////////////////////
+
+  template<>
+  struct evaluator<Ref> {
+    evaluator(const Ref& r) noexcept : ref_(r) {}
+    [[nodiscard]] Frame<1> eval(Frame<0>) const
+    {
+      return *ref_.ptr;
+    }
+
+  private:
+    Ref ref_;
+  };
+
+} // namespace eda

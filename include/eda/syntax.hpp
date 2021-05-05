@@ -2,17 +2,17 @@
 
 #include "eda/block.hpp"
 
-namespace topisani::eda::syntax {
+namespace eda::syntax {
 
   // LITERAL ///////////////////////////////////////////
-   
-  constexpr Literal operator"" _eda(long double f)
+
+  constexpr Literal operator"" _eda(long double f) noexcept
   {
-    return wrap_literal(static_cast<float>(f));
+    return as_block(static_cast<float>(f));
   }
-  constexpr Literal operator"" _eda(unsigned long long f)
+  constexpr Literal operator"" _eda(unsigned long long f) noexcept
   {
-    return wrap_literal(static_cast<float>(f));
+    return as_block(static_cast<float>(f));
   }
 
   // IDENT /////////////////////////////////////////////
@@ -22,61 +22,61 @@ namespace topisani::eda::syntax {
   // PARALLEL //////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator,(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator,(Lhs&& lhs, Rhs&& rhs) noexcept //
+    requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return parallel(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return parallel(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // SEQUENTIAL ////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator|(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator|(Lhs&& lhs, Rhs&& rhs) noexcept //
+    requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return sequential(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return sequential(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // Split /////////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator<<(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator<<(Lhs&& lhs, Rhs&& rhs) noexcept //
+    requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return split(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return split(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // MERGE /////////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator>>(Lhs&& lhs, Rhs&& rhs) //
-    requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator>>(Lhs&& lhs, Rhs&& rhs) noexcept //
+    requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return merge(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return merge(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // ARITHMETIC ////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator+(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator+(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
     return plus(lhs, rhs);
   }
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator-(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator-(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
     return minus(lhs, rhs);
   }
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator*(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator*(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
     return times(lhs, rhs);
   }
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator/(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator/(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
     return divide(lhs, rhs);
   }
@@ -84,9 +84,9 @@ namespace topisani::eda::syntax {
   // RECURSIVE /////////////////////////////////////////
 
   template<typename Lhs, typename Rhs>
-  constexpr auto operator%(Lhs&& lhs, Rhs&& rhs) requires(ABlockRef<Lhs> || ABlockRef<Rhs>)
+  constexpr auto operator%(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return recursive(wrap_literal(FWD(lhs)), wrap_literal(FWD(rhs)));
+    return recursive(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
-} // namespace topisani::eda::syntax
+} // namespace eda::syntax

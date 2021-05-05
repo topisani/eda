@@ -13,7 +13,7 @@
 #define TEST_EXPR(Expr, In, Out) BASIC_TEST_EXPR(TEST_CASE, Expr, In, Out)
 #define EXPR_SECTION(Expr, In, Out) BASIC_TEST_EXPR(SECTION, Expr, In, Out)
 
-namespace topisani::eda {
+namespace eda {
 
   using namespace syntax;
 
@@ -66,10 +66,12 @@ namespace topisani::eda {
   }
 
   TEST_CASE ("Currying") {
+    REQUIRE(eval((_, _, _, _)(1, 2, 3), {4}) == Frame(1, 2, 3, 4));
     auto f1 = (_ + 1);
     auto f2 = (_ - _);
     auto f4 = (_, _, _, _);
     auto f = f4(f1, f2);
+    //static_assert(ABlock<decltype(f), 1, 2>);
     REQUIRE(eval(f, {1, 2, 3, 4, 5}) == Frame(2, -1, 4, 5));
   }
 
@@ -133,4 +135,4 @@ namespace topisani::eda {
     REQUIRE(e.eval({8, 30}) == Frame(22));
   }
 
-} // namespace topisani::eda
+} // namespace eda

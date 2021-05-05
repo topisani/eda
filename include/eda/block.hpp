@@ -6,7 +6,7 @@
 
 #include "eda/internal/util.hpp"
 
-namespace topisani::eda {
+namespace eda {
 
   // BLOCK /////////////////////////////////////////////
 
@@ -19,30 +19,34 @@ namespace topisani::eda {
     static constexpr std::size_t in_channels = InChannels;
     static constexpr std::size_t out_channels = OutChannels;
 
-    constexpr auto operator()(auto&&... inputs) const //
+    constexpr auto operator()(auto&&... inputs) const noexcept //
       requires(sizeof...(inputs) <= InChannels);
   };
 
   /// The basic concept of a block
   template<typename T>
-  concept ABlock = std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
+  concept AnyBlock = std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
 
-  /// A type that may be a reference to `ABlock`
+  /// The basic concept of a block
+  template<typename T, std::size_t I, std::size_t O>
+  concept ABlock = AnyBlock<T> &&(T::in_channels == I) && (T::out_channels == O);
+
+  /// A type that may be a reference to `AnyBlock`
   template<typename T>
-  concept ABlockRef = ABlock<std::remove_cvref_t<T>>;
+  concept AnyBlockRef = AnyBlock<std::remove_cvref_t<T>>;
 
   /// Number of input channels for block
-  template<ABlockRef T>
+  template<AnyBlockRef T>
   constexpr auto ins = std::remove_cvref_t<T>::in_channels;
 
   /// Number of output channels for block
-  template<ABlockRef T>
+  template<AnyBlockRef T>
   constexpr auto outs = std::remove_cvref_t<T>::out_channels;
 
   /// Helper class for modeling Binary operators
-  template<typename D, ABlock Lhs, ABlock Rhs, std::size_t In, std::size_t Out>
+  template<typename D, AnyBlock Lhs, AnyBlock Rhs, std::size_t In, std::size_t Out>
   struct BinOp : BlockBase<D, In, Out> {
-    constexpr BinOp(Lhs l, Rhs r) : lhs(l), rhs(r) {}
+    constexpr BinOp(Lhs l, Rhs r) noexcept : lhs(l), rhs(r) {}
     Lhs lhs;
     Rhs rhs;
   };
@@ -55,31 +59,49 @@ namespace topisani::eda {
   };
 
   /// Wrap a value in `Literal` if it is not already a block
-  constexpr decltype(auto) wrap_literal(ABlockRef auto&& input)
+  constexpr decltype(auto) as_block(AnyBlockRef auto&& input) noexcept
   {
     return FWD(input);
   }
 
   /// Wrap a value in `Literal` if it is not already a block
-  constexpr Literal wrap_literal(float f)
+  constexpr Literal as_block(float f) noexcept
   {
     return Literal{{}, f};
   }
 
-  /// The result of calling `wrap_literal`
+  /// The result of calling `as_block`
   template<typename T>
-  using wrapped_t = std::remove_cvref_t<decltype(wrap_literal(std::declval<T>()))>;
+  using as_block_t = std::remove_cvref_t<decltype(as_block(std::declval<T>()))>;
+
+  // REF ///////////////////////////////////////////////
+
+  struct Ref : BlockBase<Ref, 0, 1> {
+    float* ptr = nullptr;
+  };
+
+  constexpr Ref ref(float& f) noexcept
+  {
+    return Ref{{}, &f};
+  }
+
+  /// Convert a pointer to float to a ref block
+  constexpr Ref as_block(float* fp) noexcept
+  {
+    return ref(*fp);
+  }
 
   // CURRYING //////////////////////////////////////////
 
   /// Block used to capture parameters when calling blocks as functions
-  template<ABlock Block, ABlock Input>
-  requires(outs<Input> <= ins<Block>) //
-    struct Partial : BlockBase<Partial<Block, Input>, ins<Input> + ins<Block> - outs<Input>, outs<Block>> {
-    constexpr Partial(Block b, Input input) : block(b), input(input) {}
+  template<AnyBlock Block, AnyBlock... Inputs>
+  requires((outs<Inputs> <= ins<Block>) &&...) //
+    struct Partial
+    : BlockBase<Partial<Block, Inputs...>, ins<Block> + (ins<Inputs> + ...) - (outs<Inputs> + ...), outs<Block>> {
+    constexpr Partial(Block b, Inputs... input) noexcept : block(b), inputs(input...) {}
 
     Block block;
-    Input input;
+    std::tuple<Inputs...> inputs;
   };
 
   /// Call operator of BlockBase. Pass parameters as input signals
@@ -87,11 +109,10 @@ namespace topisani::eda {
   /// Allows currying/partial application of parameters. Parameters will be
   /// sent as inputs from left to right.
   template<typename D, std::size_t I, std::size_t O>
-  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) const //
+  constexpr auto BlockBase<D, I, O>::operator()(auto&&... inputs) const noexcept //
     requires(sizeof...(inputs) <= I)
   {
-    auto joined = parallel(wrap_literal(FWD(inputs))...);
-    return Partial<D, decltype(joined)>(static_cast<const D&>(*this), std::move(joined));
+    return Partial<D, as_block_t<decltype(inputs)>...>(static_cast<const D&>(*this), as_block(FWD(inputs))...);
   }
 
   // IDENT /////////////////////////////////////////////
@@ -113,12 +134,12 @@ namespace topisani::eda {
   /// Parallel composition block.
   ///
   /// Given input `(x0, x1)` and blocks `l, r`, outputs `(l(x0), r(x1))`
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   struct Parallel : BinOp<Parallel<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> + ins<Rhs>, outs<Lhs> + outs<Rhs>> {};
 
   /// The parallel composition of two blocks.
-  template<ABlockRef Lhs, ABlockRef Rhs>
-  constexpr auto parallel(Lhs&& lhs, Rhs&& rhs)
+  template<AnyBlockRef Lhs, AnyBlockRef Rhs>
+  constexpr auto parallel(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Parallel<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
@@ -128,14 +149,15 @@ namespace topisani::eda {
   /// Sequential composition block.
   ///
   /// Given input `x0` and blocks `l, r`, outputs `r(l(x0))`
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   requires(outs<Lhs> == ins<Rhs>) //
     struct Sequential : BinOp<Sequential<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
 
   /// The sequential composition of two blocks.
-  template<ABlockRef Lhs, ABlockRef Rhs>
-  constexpr auto sequential(Lhs&& lhs, Rhs&& rhs)
+  template<AnyBlockRef Lhs, AnyBlockRef Rhs>
+  constexpr auto sequential(Lhs&& lhs, Rhs&& rhs) noexcept
   {
+    // static_assert(outs<Lhs> == ins<Rhs>, "Custom error message");
     return Sequential<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
 
@@ -145,13 +167,13 @@ namespace topisani::eda {
   ///
   /// Given input `x` and blocks `l, r`, outputs `l(r(x'), x)`, where `x'` is the output
   /// of the previous evaluation.
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   requires(ins<Rhs> <= outs<Lhs>) && (outs<Rhs> <= ins<Lhs>) //
     struct Recursive : BinOp<Recursive<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> - outs<Rhs>, outs<Lhs>> {};
 
   /// The recursive composition of two blocks
-  template<ABlockRef Lhs, ABlockRef Rhs>
-  constexpr auto recursive(Lhs&& lhs, Rhs&& rhs)
+  template<AnyBlockRef Lhs, AnyBlockRef Rhs>
+  constexpr auto recursive(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Recursive<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
@@ -162,13 +184,13 @@ namespace topisani::eda {
   ///
   /// Given two blocks `l, r`, applies `l`, and passes the output to `r`, repeating the signals
   /// to fit the arity of `r`.
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   requires(ins<Rhs> % outs<Lhs> == 0) //
     struct Split : BinOp<Split<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
 
   /// The split composition of two blocks.
-  template<ABlockRef Lhs, ABlockRef Rhs>
-  constexpr auto split(Lhs&& lhs, Rhs&& rhs)
+  template<AnyBlockRef Lhs, AnyBlockRef Rhs>
+  constexpr auto split(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Split<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
@@ -179,13 +201,13 @@ namespace topisani::eda {
   ///
   /// Given two blocks `l, r`, applies `l`, and passes the output to `r`, such that each
   /// input to `r` is the sum of all `l(x)[i mod ins<r>]`.
-  template<ABlock Lhs, ABlock Rhs>
+  template<AnyBlock Lhs, AnyBlock Rhs>
   requires(outs<Lhs> % ins<Rhs> == 0) //
     struct Merge : BinOp<Merge<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
 
   /// The merge composition of two blocks.
-  template<ABlockRef Lhs, ABlockRef Rhs>
-  constexpr auto merge(Lhs&& lhs, Rhs&& rhs)
+  template<AnyBlockRef Lhs, AnyBlockRef Rhs>
+  constexpr auto merge(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Merge<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
@@ -224,4 +246,4 @@ namespace topisani::eda {
   struct Delay : BlockBase<Delay, 2, 1> {};
   constexpr Delay delay;
 
-} // namespace topisani::eda
+} // namespace eda
