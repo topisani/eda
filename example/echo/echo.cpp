@@ -1,6 +1,6 @@
 #include <eda/eda.hpp>
 
-#include "lv2.hpp"
+#include "../lv2.hpp"
 
 struct Echo final : LV2Plugin {
   constexpr static auto uri = "http://topisani.co/lv2/eda/echo";

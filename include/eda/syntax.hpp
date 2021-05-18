@@ -17,7 +17,8 @@ namespace eda::syntax {
 
   // IDENT /////////////////////////////////////////////
 
-  constexpr Ident _ = ident;
+  constexpr Ident<1> _ = ident<1>;
+  constexpr Cut<1> $ = cut<1>;
 
   // PARALLEL //////////////////////////////////////////
 

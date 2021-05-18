@@ -54,11 +54,11 @@ namespace eda {
             (1, 2),
             (3))
 
-  TEST_EXPR(cut, (10), ());
-  TEST_EXPR((_, cut), (1, 2), (1));
+  TEST_EXPR($, (10), ());
+  TEST_EXPR((_, $), (1, 2), (1));
 
-  TEST_CASE ("Recursive: (_, _) % (cut, _)") {
-    auto p = (_, _) % (cut, _);
+  TEST_CASE ("Recursive: (_, _) % ($, _)") {
+    auto p = (_, _) % ($, _);
     auto e = make_evaluator(p);
     REQUIRE(e.eval({1}) == Frame(0, 1));
     REQUIRE(e.eval({2}) == Frame(1, 2));
@@ -83,6 +83,10 @@ namespace eda {
     REQUIRE(e.eval({1}) == Frame(0));
     REQUIRE(e.eval({2}) == Frame(1));
     REQUIRE(e.eval({3}) == Frame(2));
+    auto b = make_evaluator(~_);
+    REQUIRE(b.eval({1}) == Frame(0));
+    REQUIRE(b.eval({2}) == Frame(1));
+    REQUIRE(b.eval({3}) == Frame(2));
   }
 
   TEST_CASE ("mem<5>") {
@@ -133,6 +137,17 @@ namespace eda {
     REQUIRE(e.eval({8, 28}) == Frame(20));
     REQUIRE(e.eval({8, 29}) == Frame(21));
     REQUIRE(e.eval({8, 30}) == Frame(22));
+  }
+
+  TEST_CASE("FunBlock") {
+    const auto f = fun<1, 2>([] (Frame<1> in) {
+      return Frame(in[0], in[0] * 2);
+    });
+    REQUIRE(eval(f, {10}) == Frame(10, 20));
+  }
+
+  TEST_CASE("Resample") {
+    // const auto f = resample<2>(mem<1>);
   }
 
 } // namespace eda

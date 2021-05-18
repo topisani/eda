@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <span>
 
+#include "eda/frame.hpp"
 #include "eda/internal/util.hpp"
 
 namespace eda {
@@ -25,7 +27,7 @@ namespace eda {
 
   /// The basic concept of a block
   template<typename T>
-  concept AnyBlock = std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T>;
+  concept AnyBlock = std::is_base_of_v<BlockBase<T, T::in_channels, T::out_channels>, T> && std::copyable<T>;
 
   /// The basic concept of a block
   template<typename T, std::size_t I, std::size_t O>
@@ -118,16 +120,20 @@ namespace eda {
   // IDENT /////////////////////////////////////////////
 
   /// Identity block. Returns its input unchanged
-  struct Ident : BlockBase<Ident, 1, 1> {};
+  template<std::size_t N = 1>
+  struct Ident : BlockBase<Ident<N>, N, N> {};
   /// The identity block.
-  constexpr Ident ident;
+  template<std::size_t N = 1>
+  constexpr Ident<N> ident;
 
   // CUT ///////////////////////////////////////////////
 
   /// Cut block. Ends a signal path and discards its input
-  struct Cut : BlockBase<Cut, 1, 0> {};
+  template<std::size_t N = 1>
+  struct Cut : BlockBase<Cut<N>, N, 0> {};
   /// The cut block.
-  constexpr Cut cut;
+  template<std::size_t N = 1>
+  constexpr Cut<N> cut;
 
   // PARALLEL //////////////////////////////////////////
 
@@ -159,6 +165,38 @@ namespace eda {
   {
     // static_assert(outs<Lhs> == ins<Rhs>, "Custom error message");
     return Sequential<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  // REPEAT ////////////////////////////////////////////
+
+  /// Apply the binary operator `composition` to `block` repeated `N` times
+  template<std::size_t N>
+  constexpr auto repeat(AnyBlock auto const& block, auto&& composition) requires requires
+  {
+    composition(block, block);
+  }
+  {
+    if constexpr (N == 0) {
+      return ident<0>;
+    } else if constexpr (N == 1) {
+      return block;
+    } else {
+      return composition(block, repeat<N - 1>(block, composition));
+    }
+  }
+
+  /// Repeat `block` `N` times through the sequential operator
+  template<std::size_t N>
+  constexpr auto repeat_seq(AnyBlock auto const& block)
+  {
+    return repeat<N>(block, [](auto&& a, auto&& b) { return sequential(a, b); });
+  }
+
+  /// Repeat `block` `N` times through the parallel operator
+  template<std::size_t N>
+  constexpr auto repeat_par(AnyBlock auto const& block)
+  {
+    return repeat<N>(block, [](auto&& a, auto&& b) { return parallel(a, b); });
   }
 
   // RECURSIVE /////////////////////////////////////////
@@ -238,6 +276,13 @@ namespace eda {
   template<std::size_t Samples = 1>
   constexpr Mem<Samples> mem;
 
+  /// Delay output of block by 1 sample
+  template<AnyBlock Block>
+  auto operator~(Block const& b)
+  {
+    return sequential(b, repeat_par<outs<Block>>(mem<1>));
+  }
+
   // DELAY /////////////////////////////////////////////
 
   /// Variable size memory block.
@@ -245,5 +290,53 @@ namespace eda {
   /// Given input signals `(d, x)`, outputs `x` delayed by `d` samples
   struct Delay : BlockBase<Delay, 2, 1> {};
   constexpr Delay delay;
+
+  // FUNCTION //////////////////////////////////////////
+
+  /// Adapt a function to a block
+  template<std::size_t In, std::size_t Out, util::Callable<Frame<Out>(Frame<In>)> F>
+  requires std::copyable<F>
+  struct FunBlock : BlockBase<FunBlock<In, Out, F>, In, Out> {
+    F func_;
+  };
+
+  template<std::size_t In, std::size_t Out>
+  constexpr auto fun(util::Callable<Frame<Out>(Frame<In>)> auto&& f)
+  {
+    return FunBlock<In, Out, std::decay_t<decltype(f)>>{.func_ = f};
+  }
+
+  constexpr auto sin = fun<1, 1>(&::sinf);
+  constexpr auto cos = fun<1, 1>(&::cosf);
+  constexpr auto tan = fun<1, 1>(&::tanf);
+  constexpr auto tanh = fun<1, 1>(&::tanhf);
+  constexpr auto mod = fun<2, 1>([](auto in) { return std::fmod(in[0], in[1]); });
+
+  // RESAMPLE //////////////////////////////////////////
+
+  template<int Factor, AnyBlock Block>
+  requires(Factor > 1) || (Factor < -1) //
+    struct Resample : BlockBase<Resample<Factor, Block>, 1, 1> {
+    Block block;
+  };
+
+  template<int Factor>
+  constexpr auto resample(AnyBlock auto block)
+  {
+    return Resample<Factor, decltype(block)>{.block = block};
+  }
+
+  // FIR ///////////////////////////////////////////////
+
+  template<std::size_t N>
+  struct FIRFilter : BlockBase<FIRFilter<N>, 1, 1> {
+    std::array<float, N> kernel;
+  };
+
+  template<std::size_t N>
+  constexpr auto fir(std::array<float, N> kernel) noexcept
+  {
+    return FIRFilter<N>{.kernel = kernel};
+  }
 
 } // namespace eda

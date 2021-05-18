@@ -1,5 +1,7 @@
 #pragma once
 
+#include <numeric>
+
 #include "eda/block.hpp"
 #include "eda/frame.hpp"
 
@@ -99,10 +101,10 @@ namespace eda {
 
   // IDENT /////////////////////////////////////////////
 
-  template<>
-  struct evaluator<Ident> {
-    constexpr evaluator(Ident){};
-    static Frame<1> eval(Frame<1> in)
+  template<std::size_t N>
+  struct evaluator<Ident<N>> {
+    constexpr evaluator(Ident<N>){};
+    static Frame<N> eval(Frame<N> in)
     {
       return in;
     }
@@ -110,10 +112,10 @@ namespace eda {
 
   // CUT ///////////////////////////////////////////////
 
-  template<>
-  struct evaluator<Cut> {
-    constexpr evaluator(Cut) {}
-    static Frame<0> eval(Frame<1>)
+  template<std::size_t N>
+  struct evaluator<Cut<N>> {
+    constexpr evaluator(Cut<N>) {}
+    static Frame<0> eval(Frame<N>)
     {
       return {};
     }
@@ -314,7 +316,7 @@ namespace eda {
       }
       float res = memory_[(memory_.size() + index_ - delay) % memory_.size()];
       memory_[index_] = in[1];
-      index_++;
+      ++index_;
       index_ %= static_cast<std::ptrdiff_t>(memory_.size());
       return res;
     }
@@ -328,7 +330,7 @@ namespace eda {
 
   template<>
   struct evaluator<Ref> {
-    evaluator(const Ref& r) noexcept : ref_(r) {}
+    constexpr evaluator(const Ref& r) noexcept : ref_(r) {}
     [[nodiscard]] Frame<1> eval(Frame<0>) const
     {
       return *ref_.ptr;
@@ -336,6 +338,70 @@ namespace eda {
 
   private:
     Ref ref_;
+  };
+
+  // FUNCTION //////////////////////////////////////////
+
+  /// Adapt a function to a block
+  template<std::size_t In, std::size_t Out, typename F>
+  struct evaluator<FunBlock<In, Out, F>> {
+    constexpr evaluator(const FunBlock<In, Out, F>& f) noexcept : fb_(f) {}
+    [[nodiscard]] Frame<Out> eval(Frame<In> in) const
+    {
+      return fb_.func_(in);
+    }
+
+  private:
+    FunBlock<In, Out, F> fb_;
+  };
+
+  // RESAMPLE //////////////////////////////////////////
+
+  template<int Factor, AnyBlock Block>
+  struct evaluator<Resample<Factor, Block>> {
+    static_assert(Factor > 1, "Resampling not implemented for downsampling first");
+
+    constexpr evaluator(Resample<Factor, Block>& resample) noexcept : block_(resample.block) {}
+
+    constexpr Frame<outs<Block>> eval(Frame<ins<Block>> in)
+    {
+      Frame<outs<Block>> res = block_.eval(in);
+      for (int i = 1; i < Factor; i++) {
+        block_.eval({});
+      }
+      return res;
+    }
+
+  private:
+    evaluator<Block> block_;
+  };
+
+  // FIR ///////////////////////////////////////////////
+
+  template<std::size_t N>
+  struct evaluator<FIRFilter<N>> {
+    constexpr evaluator(const FIRFilter<N>& fir) noexcept
+    {
+      std::ranges::copy(fir.kernel, kernel.begin());
+      std::ranges::copy(fir.kernel, kernel.begin() + N);
+    }
+
+    constexpr Frame<1> eval(Frame<1> in)
+    {
+      if (t == N) t = 0;
+      t++;
+      z[N - t] = in;
+      // By repeating the kernel, there is always a contiguous range to
+      // run the inner product on
+      auto start = kernel.begin() + t;
+      return std::inner_product(start, start + N, z.begin(), 0.f);
+    }
+
+  private:
+    std::size_t t = 0;
+    std::array<float, N> z = {0};
+    /// Kernel is repeated
+    std::array<float, 2 * N> kernel;
   };
 
 } // namespace eda
