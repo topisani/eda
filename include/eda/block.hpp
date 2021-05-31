@@ -145,9 +145,15 @@ namespace eda {
 
   /// The parallel composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
-  constexpr auto parallel(Lhs&& lhs, Rhs&& rhs) noexcept
+  constexpr auto par(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Parallel<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+  
+  template<AnyBlockRef A, AnyBlockRef B, AnyBlockRef... Blocks>
+  constexpr auto par(A&& a, B&& b, Blocks&&... blocks) noexcept
+  {
+    return par(a, par(b, blocks...));
   }
 
   // SEQUENTIAL ////////////////////////////////////////
@@ -161,10 +167,15 @@ namespace eda {
 
   /// The sequential composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
-  constexpr auto sequential(Lhs&& lhs, Rhs&& rhs) noexcept
+  constexpr auto seq(Lhs&& lhs, Rhs&& rhs) noexcept
   {
-    // static_assert(outs<Lhs> == ins<Rhs>, "Custom error message");
     return Sequential<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
+  }
+
+  template<AnyBlockRef A, AnyBlockRef B, AnyBlockRef... Blocks>
+  constexpr auto seq(A&& a, B&& b, Blocks&&... blocks) noexcept
+  {
+    return seq(a, seq(b, blocks...));
   }
 
   // REPEAT ////////////////////////////////////////////
@@ -189,14 +200,14 @@ namespace eda {
   template<std::size_t N>
   constexpr auto repeat_seq(AnyBlock auto const& block)
   {
-    return repeat<N>(block, [](auto&& a, auto&& b) { return sequential(a, b); });
+    return repeat<N>(block, [](auto&& a, auto&& b) { return seq(a, b); });
   }
 
   /// Repeat `block` `N` times through the parallel operator
   template<std::size_t N>
   constexpr auto repeat_par(AnyBlock auto const& block)
   {
-    return repeat<N>(block, [](auto&& a, auto&& b) { return parallel(a, b); });
+    return repeat<N>(block, [](auto&& a, auto&& b) { return par(a, b); });
   }
 
   // RECURSIVE /////////////////////////////////////////
@@ -211,7 +222,7 @@ namespace eda {
 
   /// The recursive composition of two blocks
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
-  constexpr auto recursive(Lhs&& lhs, Rhs&& rhs) noexcept
+  constexpr auto rec(Lhs&& lhs, Rhs&& rhs) noexcept
   {
     return Recursive<std::remove_cvref_t<Lhs>, std::remove_cvref_t<Rhs>>{{FWD(lhs), FWD(rhs)}};
   }
@@ -280,7 +291,7 @@ namespace eda {
   template<AnyBlock Block>
   auto operator~(Block const& b)
   {
-    return sequential(b, repeat_par<outs<Block>>(mem<1>));
+    return seq(b, repeat_par<outs<Block>>(mem<1>));
   }
 
   // DELAY /////////////////////////////////////////////
@@ -312,18 +323,22 @@ namespace eda {
   constexpr auto tanh = fun<1, 1>(&::tanhf);
   constexpr auto mod = fun<2, 1>([](auto in) { return std::fmod(in[0], in[1]); });
 
-  // RESAMPLE //////////////////////////////////////////
+  // STATEFUL_FUNC /////////////////////////////////////
 
-  template<int Factor, AnyBlock Block>
-  requires(Factor > 1) || (Factor < -1) //
-    struct Resample : BlockBase<Resample<Factor, Block>, 1, 1> {
-    Block block;
+  template<std::size_t In, std::size_t Out, typename Func, typename... States>
+  requires(util::Callable<Func, Frame<Out>(Frame<In>, States&...)>&& std::copyable<Func>) &&
+    (std::copyable<States> && ...) //
+    struct StatefulFunc : BlockBase<StatefulFunc<In, Out, Func, States...>, In, Out> {
+    Func func;
+    std::tuple<States...> states;
   };
 
-  template<int Factor>
-  constexpr auto resample(AnyBlock auto block)
+  template<std::size_t In, std::size_t Out, typename... States>
+  constexpr auto fun(util::Callable<Frame<Out>(Frame<In>, std::remove_cvref_t<States>&...)> auto&& f,
+                     States&&... states)
   {
-    return Resample<Factor, decltype(block)>{.block = block};
+    return StatefulFunc<In, Out, std::decay_t<decltype(f)>, std::remove_cvref_t<States>...>{.func = f,
+                                                                                            .states = {FWD(states)...}};
   }
 
   // FIR ///////////////////////////////////////////////

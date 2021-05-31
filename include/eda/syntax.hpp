@@ -26,7 +26,7 @@ namespace eda::syntax {
   constexpr auto operator,(Lhs&& lhs, Rhs&& rhs) noexcept //
     requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return parallel(as_block(FWD(lhs)), as_block(FWD(rhs)));
+    return par(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // SEQUENTIAL ////////////////////////////////////////
@@ -35,7 +35,7 @@ namespace eda::syntax {
   constexpr auto operator|(Lhs&& lhs, Rhs&& rhs) noexcept //
     requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return sequential(as_block(FWD(lhs)), as_block(FWD(rhs)));
+    return seq(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
   // Split /////////////////////////////////////////////
@@ -87,7 +87,7 @@ namespace eda::syntax {
   template<typename Lhs, typename Rhs>
   constexpr auto operator%(Lhs&& lhs, Rhs&& rhs) noexcept requires(AnyBlockRef<Lhs> || AnyBlockRef<Rhs>)
   {
-    return recursive(as_block(FWD(lhs)), as_block(FWD(rhs)));
+    return rec(as_block(FWD(lhs)), as_block(FWD(rhs)));
   }
 
 } // namespace eda::syntax

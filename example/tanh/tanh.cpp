@@ -9,8 +9,8 @@ struct Tanh final : LV2Plugin {
     : process(eda::make_evaluator([this] {
         using namespace eda;
         using namespace eda::syntax;
-        const auto sat =_ * ref(gain) | eda::tanh | _ / ref(gain) ;
-        return halfband; // resample<2>(halfband | sat | halfband);
+        const auto sat = _ * ref(gain) | eda::tanh;
+        return resample<4>(sat);
       }()))
   {}
 

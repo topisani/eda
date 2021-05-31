@@ -355,25 +355,20 @@ namespace eda {
     FunBlock<In, Out, F> fb_;
   };
 
-  // RESAMPLE //////////////////////////////////////////
+  // STATEFUL_FUNC /////////////////////////////////////
 
-  template<int Factor, AnyBlock Block>
-  struct evaluator<Resample<Factor, Block>> {
-    static_assert(Factor > 1, "Resampling not implemented for downsampling first");
+  template<std::size_t In, std::size_t Out, typename Func, typename... States>
+  struct evaluator<StatefulFunc<In, Out, Func, States...>> {
+    constexpr evaluator(const StatefulFunc<In, Out, Func, States...>& f) noexcept : func_(f.func), states_(f.states) {}
 
-    constexpr evaluator(Resample<Factor, Block>& resample) noexcept : block_(resample.block) {}
-
-    constexpr Frame<outs<Block>> eval(Frame<ins<Block>> in)
+    Frame<Out> eval(Frame<In> in)
     {
-      Frame<outs<Block>> res = block_.eval(in);
-      for (int i = 1; i < Factor; i++) {
-        block_.eval({});
-      }
-      return res;
+      return std::apply([&](States&... s) { return func_(in, s...); }, states_);
     }
 
   private:
-    evaluator<Block> block_;
+    Func func_;
+    std::tuple<States...> states_;
   };
 
   // FIR ///////////////////////////////////////////////
