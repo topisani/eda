@@ -74,8 +74,6 @@ namespace eda {
   struct Frame<0> {
     constexpr Frame() = default;
     static constexpr std::size_t size()
-
-    // PARALLEL //////////////////////////////////////////
     {
       return 0;
     }
@@ -106,9 +104,12 @@ namespace eda {
 
   Frame(auto... floats) -> Frame<sizeof...(floats)>;
 
+  /// Get a subsection of the frame which contains [Begin; End[.
+  ///
+  /// If End is negative, count `-End` elements from the end of the array.
   template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
   requires(Begin >= 0 && ((End >= Begin && End <= Channels))) //
-    constexpr auto splice(const Frame<Channels>& in)
+    constexpr auto slice(const Frame<Channels>& in)
   {
     Frame<End - Begin> res;
     std::copy(in.begin() + Begin, in.begin() + End, res.begin());
@@ -117,11 +118,12 @@ namespace eda {
 
   template<std::ptrdiff_t Begin, std::ptrdiff_t End, std::size_t Channels>
   requires(Begin >= 0 && End < 0 && (Channels + End + 1) >= Begin) //
-    constexpr auto splice(const Frame<Channels>& in)               //
+    constexpr auto slice(const Frame<Channels>& in)               //
   {
-    return splice<Begin, Channels + End + 1, Channels>(in);
+    return slice<Begin, Channels + End + 1, Channels>(in);
   }
 
+  /// Concatenate two frames
   template<std::size_t S1, std::size_t S2>
   constexpr auto concat(const Frame<S1>& x1, const Frame<S2>& x2) -> Frame<S1 + S2>
   {
@@ -136,45 +138,5 @@ namespace eda {
   {
     return concat(x, concat(xs...));
   }
-
-
-  /// The basic data type used for audio samples and other real numbers.
-  /// Hardcoded to float here for simplicity, but all types could have it
-  /// as a template parameter.
-  using real = float;
-
-  /// A non-owning buffer of audio.
-  template<std::size_t Channels>
-  struct AudioBuffer {
-    /// Constructor that does not require explicit conversion to span first
-    /// Takes a `contiguous_range` of `real`, and constructs the internal span
-    /// with it
-    template<std::ranges::contiguous_range Range>
-    requires(std::is_same_v<std::ranges::range_value_t<Range>, real>) //
-      AudioBuffer(Range&& data)
-    noexcept // NOLINT
-      : data_(std::forward<Range>(data))
-    {}
-
-    /// Get the begin iterator
-    auto begin() noexcept
-    {
-      return data_.begin();
-    }
-
-    /// Get the end iterator
-    auto end() noexcept
-    {
-      return data_.end();
-    }
-
-  private:
-    std::span<real> data_;
-  };
-  template<typename T, std::size_t InChannels, std::size_t OutChannels>
-  concept AnAudioProcessor = requires(T t, AudioBuffer<InChannels> in, AudioBuffer<OutChannels> out)
-  {
-    t.process(in, out);
-  };
 
 } // namespace eda

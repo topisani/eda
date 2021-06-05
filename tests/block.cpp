@@ -13,9 +13,16 @@
 #define TEST_EXPR(Expr, In, Out) BASIC_TEST_EXPR(TEST_CASE, Expr, In, Out)
 #define EXPR_SECTION(Expr, In, Out) BASIC_TEST_EXPR(SECTION, Expr, In, Out)
 
+using namespace eda;
+using namespace eda::syntax;
+
+auto block = (_, _) | (_);
+
 namespace eda {
 
   using namespace syntax;
+
+  
 
   TEST_EXPR(_ - _, (1, 2), (-1));
   TEST_EXPR((_ + 0.5), //

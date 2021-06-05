@@ -105,15 +105,13 @@ namespace eda {
 
   template<int N, AnyBlock Block>
   requires(N > 1) || (N < -1) //
-    struct Resample : BlockBase<Resample<N, Block>, 1, 1> {
-    Block block;
-  };
+  struct Resample : CompositionBase<Resample<N, Block>, 1, 1, Block> {};
 
   template<int N>
   constexpr auto resample(AnyBlock auto block, AnyBlock auto f1, AnyBlock auto f2)
   {
     auto filter_block = seq(f1, block, f2);
-    return Resample<N, decltype(filter_block)>{.block = filter_block};
+    return Resample<N, decltype(filter_block)>{{filter_block}};
   }
 
   template<int N>
@@ -123,10 +121,10 @@ namespace eda {
   }
 
   template<int N, AnyBlock Block>
-  struct evaluator<Resample<N, Block>> {
+  struct evaluator<Resample<N, Block>> : EvaluatorBase<Resample<N, Block>> {
     static_assert(N > 1, "Resampling not implemented for downsampling first");
 
-    constexpr evaluator(Resample<N, Block>& resample) noexcept : block_(resample.block) {}
+    constexpr evaluator(const Resample<N, Block>& resample) noexcept : EvaluatorBase<Resample<N, Block>>(resample) {}
 
     constexpr Frame<outs<Block>> eval(Frame<ins<Block>> in)
     {
@@ -134,15 +132,12 @@ namespace eda {
       for (float& f : in) {
         f *= N;
       }
-      Frame<outs<Block>> res = block_.eval(in);
+      Frame<outs<Block>> res = std::get<0>(this->operands).eval(in);
       for (int i = 1; i < N; i++) {
-        block_.eval({});
+        std::get<0>(this->operands).eval({});
       }
       return res;
     }
-
-  private:
-    evaluator<Block> block_;
   };
 
 } // namespace eda

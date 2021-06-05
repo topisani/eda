@@ -9,7 +9,7 @@ namespace eda {
 
   // EVALUATOR /////////////////////////////////////////
 
-  template<typename T>
+  template<AnyBlock T>
   struct evaluator;
 
   template<typename T>
@@ -23,16 +23,52 @@ namespace eda {
   template<typename T>
   using block_for_t = typename block_for<T>::type;
 
-  constexpr auto make_evaluator(AnyBlockRef auto&& b)
-  {
-    return evaluator<std::decay_t<decltype(b)>>(b);
-  }
-
   template<AnyBlock Block>
   constexpr auto eval(Block block, Frame<Block::in_channels> in)
   {
     return make_evaluator(block).eval(in);
   }
+  
+  // COMPOSITION EVALUATOR /////////////////////////////
+
+  template<AnyBlock T>
+  struct EvaluatorBase {};
+
+  namespace detail {
+    template<typename T>
+    struct add_evaluator {};
+
+    template<typename... Ts>
+    struct add_evaluator<std::tuple<Ts...>> {
+      using type = std::tuple<evaluator<Ts>...>;
+    };
+
+    template<typename T>
+    using add_evaluator_t = typename add_evaluator<T>::type;
+  } // namespace detail
+
+  template<AComposition T>
+  struct EvaluatorBase<T> {
+    constexpr EvaluatorBase(const T& t) : operands(t.operands) {}
+    detail::add_evaluator_t<operands_t<T>> operands;
+  };
+
+  template<typename T>
+  concept AnEvaluator = 
+    std::derived_from<T, EvaluatorBase<block_for_t<T>>>
+    && std::is_constructible_v<T, block_for_t<T> const&>
+    && requires (T t, Frame<ins<block_for_t<T>>> in) {
+      { t.eval(in) } -> std::convertible_to<Frame<outs<block_for_t<T>>>>;
+    };
+
+  template<AnyBlockRef T>
+  constexpr auto make_evaluator(T&& b)
+  requires AnEvaluator<evaluator<std::remove_cvref_t<T>>>
+  {
+    return evaluator<std::remove_cvref_t<T>>(b);
+  }
+
+  // DYN EVALUATOR /////////////////////////////////////
 
   template<std::size_t Ins, std::size_t Outs>
   struct DynEvaluator {
@@ -73,7 +109,7 @@ namespace eda {
   // CURRYING //////////////////////////////////////////
 
   template<AnyBlock Block, AnyBlock... Inputs>
-  struct evaluator<Partial<Block, Inputs...>> {
+  struct evaluator<Partial<Block, Inputs...>> : EvaluatorBase<Partial<Block, Inputs...>> {
     constexpr evaluator(const Partial<Block, Inputs...>& block) : block_(block.block), inputs_(block.inputs) {}
 
     constexpr Frame<outs<Partial<Block, Inputs...>>> eval(Frame<ins<Partial<Block, Inputs...>>> in)
@@ -90,8 +126,8 @@ namespace eda {
       } else {
         auto& arg_block = std::get<Idx>(inputs_);
         constexpr auto arg_ins = ins<block_for_t<std::remove_cvref_t<decltype(arg_block)>>>;
-        auto arg_res = arg_block.eval(splice<0, arg_ins>(in));
-        return concat(arg_res, eval_impl<Idx + 1>(splice<arg_ins, -1>(in)));
+        auto arg_res = arg_block.eval(slice<0, arg_ins>(in));
+        return concat(arg_res, eval_impl<Idx + 1>(slice<arg_ins, -1>(in)));
       }
     }
 
@@ -102,7 +138,7 @@ namespace eda {
   // IDENT /////////////////////////////////////////////
 
   template<std::size_t N>
-  struct evaluator<Ident<N>> {
+  struct evaluator<Ident<N>> : EvaluatorBase<Ident<N>> {
     constexpr evaluator(Ident<N>){};
     static Frame<N> eval(Frame<N> in)
     {
@@ -113,7 +149,7 @@ namespace eda {
   // CUT ///////////////////////////////////////////////
 
   template<std::size_t N>
-  struct evaluator<Cut<N>> {
+  struct evaluator<Cut<N>> : EvaluatorBase<Cut<N>> {
     constexpr evaluator(Cut<N>) {}
     static Frame<0> eval(Frame<N>)
     {
@@ -121,105 +157,87 @@ namespace eda {
     }
   };
 
-  // PARALLEL //////////////////////////////////////////
+  // SEQUENTIAL ////////////////////////////////////////
 
   template<AnyBlock Lhs, AnyBlock Rhs>
-  struct evaluator<Parallel<Lhs, Rhs>> {
-    constexpr evaluator(const Parallel<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
-
-    constexpr Frame<outs<Parallel<Lhs, Rhs>>> eval(Frame<ins<Parallel<Lhs, Rhs>>> in)
-    {
-      auto l = lhs_.eval(splice<0, ins<Lhs>>(in));
-      auto r = rhs_.eval(splice<ins<Lhs>, -1>(in));
-      return concat(l, r);
-    }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
-  };
-
-  // SERIAL ////////////////////////////////////////////
-
-  template<AnyBlock Lhs, AnyBlock Rhs>
-  struct evaluator<Sequential<Lhs, Rhs>> {
-    constexpr evaluator(const Sequential<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+  struct evaluator<Sequential<Lhs, Rhs>> : EvaluatorBase<Sequential<Lhs, Rhs>> {
+    constexpr evaluator(const Sequential<Lhs, Rhs>& block) : EvaluatorBase<Sequential<Lhs, Rhs>>(block) {}
 
     constexpr Frame<outs<Sequential<Lhs, Rhs>>> eval(Frame<ins<Sequential<Lhs, Rhs>>> in)
     {
-      auto l = lhs_.eval(in);
-      return rhs_.eval(l);
+      auto l = std::get<0>(this->operands).eval(in);
+      return std::get<1>(this->operands).eval(l);
     }
+  };
 
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
+  // PARALLEL //////////////////////////////////////////
+
+  template<AnyBlock Lhs, AnyBlock Rhs>
+  struct evaluator<Parallel<Lhs, Rhs>> : EvaluatorBase<Parallel<Lhs, Rhs>> {
+    constexpr evaluator(const Parallel<Lhs, Rhs>& block) : EvaluatorBase<Parallel<Lhs, Rhs>>(block) {}
+
+    constexpr Frame<outs<Parallel<Lhs, Rhs>>> eval(Frame<ins<Parallel<Lhs, Rhs>>> in)
+    {
+      auto l = std::get<0>(this->operands).eval(slice<0, ins<Lhs>>(in));
+      auto r = std::get<1>(this->operands).eval(slice<ins<Lhs>, -1>(in));
+      return concat(l, r);
+    }
   };
 
   // RECURSIVE /////////////////////////////////////////
 
   template<AnyBlock Lhs, AnyBlock Rhs>
-  struct evaluator<Recursive<Lhs, Rhs>> {
-    constexpr evaluator(const Recursive<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+  struct evaluator<Recursive<Lhs, Rhs>> : EvaluatorBase<Recursive<Lhs, Rhs>> {
+    constexpr evaluator(const Recursive<Lhs, Rhs>& block) : EvaluatorBase<Recursive<Lhs, Rhs>>(block) {}
     constexpr Frame<outs<Recursive<Lhs, Rhs>>> eval(Frame<ins<Recursive<Lhs, Rhs>>> in)
     {
-      auto l_out = lhs_.eval(concat(memory_, in));
-      memory_ = rhs_.eval(splice<0, ins<Rhs>>(l_out));
+      auto l_out = std::get<0>(this->operands).eval(concat(memory_, in));
+      memory_ = std::get<1>(this->operands).eval(slice<0, ins<Rhs>>(l_out));
       return l_out;
     }
 
   private:
     Frame<outs<Rhs>> memory_;
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
   };
 
   // Split /////////////////////////////////////////////
 
   template<AnyBlock Lhs, AnyBlock Rhs>
-  struct evaluator<Split<Lhs, Rhs>> {
-    constexpr evaluator(const Split<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+  struct evaluator<Split<Lhs, Rhs>> : EvaluatorBase<Split<Lhs, Rhs>> {
+    constexpr evaluator(const Split<Lhs, Rhs>& block) : EvaluatorBase<Split<Lhs, Rhs>>(block) {}
 
     constexpr Frame<outs<Split<Lhs, Rhs>>> eval(Frame<ins<Split<Lhs, Rhs>>> in)
     {
-      auto l = lhs_.eval(in);
+      auto l = std::get<0>(this->operands).eval(in);
       Frame<ins<Rhs>> rhs_in;
       for (std::size_t i = 0; i < rhs_in.channels(); i++) {
         rhs_in[i] = l[i % l.channels()];
       }
-      return rhs_.eval(rhs_in);
+      return std::get<1>(this->operands).eval(rhs_in);
     }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
   };
 
   // MERGE /////////////////////////////////////////////
 
   template<AnyBlock Lhs, AnyBlock Rhs>
-  struct evaluator<Merge<Lhs, Rhs>> {
-    constexpr evaluator(const Merge<Lhs, Rhs>& block) : lhs_(block.lhs), rhs_(block.rhs) {}
+  struct evaluator<Merge<Lhs, Rhs>> : EvaluatorBase<Merge<Lhs, Rhs>> {
+    constexpr evaluator(const Merge<Lhs, Rhs>& block) : EvaluatorBase<Merge<Lhs, Rhs>>(block) {}
 
     constexpr Frame<outs<Merge<Lhs, Rhs>>> eval(Frame<ins<Merge<Lhs, Rhs>>> in)
     {
-      auto lhs_out = lhs_.eval(in);
+      auto lhs_out = std::get<0>(this->operands).eval(in);
       Frame<ins<Rhs>> rhs_in;
       for (std::size_t i = 0; i < lhs_out.channels(); i++) {
         rhs_in[i % rhs_in.channels()] += lhs_out[i];
       }
-      return rhs_.eval(rhs_in);
+      return std::get<1>(this->operands).eval(rhs_in);
     }
-
-  private:
-    evaluator<Lhs> lhs_;
-    evaluator<Rhs> rhs_;
   };
 
   // ARITHMETIC ////////////////////////////////////////
 
   template<>
-  struct evaluator<Plus> {
+  struct evaluator<Plus> : EvaluatorBase<Plus> {
     constexpr evaluator(Plus){};
     constexpr static Frame<1> eval(Frame<2> in)
     {
@@ -228,7 +246,7 @@ namespace eda {
   };
 
   template<>
-  struct evaluator<Minus> {
+  struct evaluator<Minus> : EvaluatorBase<Minus> {
     constexpr evaluator(Minus){};
     constexpr static Frame<1> eval(Frame<2> in)
     {
@@ -237,7 +255,7 @@ namespace eda {
   };
 
   template<>
-  struct evaluator<Times> {
+  struct evaluator<Times> : EvaluatorBase<Times> {
     constexpr evaluator(Times){};
     constexpr static Frame<1> eval(Frame<2> in)
     {
@@ -245,7 +263,7 @@ namespace eda {
     }
   };
   template<>
-  struct evaluator<Divide> {
+  struct evaluator<Divide> : EvaluatorBase<Divide> {
     constexpr evaluator(Divide){};
     constexpr static Frame<1> eval(Frame<2> in)
     {
@@ -256,7 +274,7 @@ namespace eda {
   // MEM ///////////////////////////////////////////////
 
   template<>
-  struct evaluator<Mem<1>> {
+  struct evaluator<Mem<1>> : EvaluatorBase<Mem<1>> {
     constexpr evaluator(const Mem<1>&) {}
     constexpr Frame<1> eval(Frame<1> in)
     {
@@ -269,7 +287,7 @@ namespace eda {
   };
 
   template<>
-  struct evaluator<Mem<0>> {
+  struct evaluator<Mem<0>> : EvaluatorBase<Mem<0>> {
     constexpr evaluator(const Mem<0>&) {}
     constexpr Frame<1> eval(Frame<1> in)
     {
@@ -278,7 +296,7 @@ namespace eda {
   };
 
   template<std::size_t Samples>
-  struct evaluator<Mem<Samples>> {
+  struct evaluator<Mem<Samples>> : EvaluatorBase<Mem<Samples>> {
     constexpr evaluator(const Mem<Samples>&) {}
     constexpr Frame<1> eval(Frame<1> in)
     {
@@ -299,7 +317,7 @@ namespace eda {
   ///
   /// Memory is implemented as a `std::vector`, and never shrinks
   template<>
-  struct evaluator<Delay> {
+  struct evaluator<Delay> : EvaluatorBase<Delay> {
     evaluator(const Delay&) {}
     Frame<outs<Delay>> eval(Frame<ins<Delay>> in)
     {
@@ -329,7 +347,7 @@ namespace eda {
   // REF ///////////////////////////////////////////////
 
   template<>
-  struct evaluator<Ref> {
+  struct evaluator<Ref> : EvaluatorBase<Ref> {
     constexpr evaluator(const Ref& r) noexcept : ref_(r) {}
     [[nodiscard]] Frame<1> eval(Frame<0>) const
     {
@@ -344,7 +362,7 @@ namespace eda {
 
   /// Adapt a function to a block
   template<std::size_t In, std::size_t Out, typename F>
-  struct evaluator<FunBlock<In, Out, F>> {
+  struct evaluator<FunBlock<In, Out, F>> : EvaluatorBase<FunBlock<In, Out, F>> {
     constexpr evaluator(const FunBlock<In, Out, F>& f) noexcept : fb_(f) {}
     [[nodiscard]] Frame<Out> eval(Frame<In> in) const
     {
@@ -358,7 +376,7 @@ namespace eda {
   // STATEFUL_FUNC /////////////////////////////////////
 
   template<std::size_t In, std::size_t Out, typename Func, typename... States>
-  struct evaluator<StatefulFunc<In, Out, Func, States...>> {
+  struct evaluator<StatefulFunc<In, Out, Func, States...>> : EvaluatorBase<StatefulFunc<In, Out, Func, States...>> {
     constexpr evaluator(const StatefulFunc<In, Out, Func, States...>& f) noexcept : func_(f.func), states_(f.states) {}
 
     Frame<Out> eval(Frame<In> in)
@@ -374,7 +392,7 @@ namespace eda {
   // FIR ///////////////////////////////////////////////
 
   template<std::size_t N>
-  struct evaluator<FIRFilter<N>> {
+  struct evaluator<FIRFilter<N>> : EvaluatorBase<FIRFilter<N>> {
     constexpr evaluator(const FIRFilter<N>& fir) noexcept
     {
       std::ranges::copy(fir.kernel, kernel.begin());

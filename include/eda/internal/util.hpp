@@ -20,14 +20,20 @@ namespace eda::util {
 
   template<typename Func>
   using function_ptr = typename detail::function_ptr_impl<Func>::type;
+  
+  template<typename Test, template<typename...> class Ref>
+  struct is_instance : std::false_type {};
+
+  template<template<typename...> class Ref, typename... Args>
+  struct is_instance<Ref<Args...>, Ref>: std::true_type {};
+
+  /// Check whether T is a instance of the template Template
+  /// Does not work when Template has non-type template parameters
+  template<typename T, template<typename...> typename Template>
+  concept instance_of = is_instance<T, Template>::value;
 
   template<typename T>
-  struct is_tuple : std::false_type {};
-  template<typename... Ts>
-  struct is_tuple<std::tuple<Ts...>> : std::true_type {};
-
-  template<typename T>
-  concept ATuple = is_tuple<T>::value;
+  concept ATuple = instance_of<T, std::tuple>;
 
   template<typename T, ATuple Tup>
   struct is_constructible_through_apply;

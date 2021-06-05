@@ -44,14 +44,27 @@ namespace eda {
   /// Number of output channels for block
   template<AnyBlockRef T>
   constexpr auto outs = std::remove_cvref_t<T>::out_channels;
-
-  /// Helper class for modeling Binary operators
-  template<typename D, AnyBlock Lhs, AnyBlock Rhs, std::size_t In, std::size_t Out>
-  struct BinOp : BlockBase<D, In, Out> {
-    constexpr BinOp(Lhs l, Rhs r) noexcept : lhs(l), rhs(r) {}
-    Lhs lhs;
-    Rhs rhs;
+  
+  // COMPOSITION ///////////////////////////////////////
+  
+  template<typename D, std::size_t In, std::size_t Out, AnyBlock... Operands>
+  struct CompositionBase : BlockBase<D, In, Out> {
+    using operands_t = std::tuple<Operands...>;
+    constexpr CompositionBase(Operands... ops) noexcept : operands(std::move(ops)...) {}
+    operands_t operands;
   };
+
+  template<typename T>
+  concept AComposition = AnyBlock<T> && requires (T& t) {
+    typename T::operands_t; 
+    { t.operands } -> util::decays_to<typename T::operands_t>;
+  };
+
+  template<typename T>
+  concept ACompositionRef = AComposition<std::remove_cvref_t<T>>;
+
+  template<ACompositionRef T>
+  using operands_t = typename std::remove_cvref_t<T>::operands_t;
 
   // LITERAL ///////////////////////////////////////////
 
@@ -141,7 +154,7 @@ namespace eda {
   ///
   /// Given input `(x0, x1)` and blocks `l, r`, outputs `(l(x0), r(x1))`
   template<AnyBlock Lhs, AnyBlock Rhs>
-  struct Parallel : BinOp<Parallel<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> + ins<Rhs>, outs<Lhs> + outs<Rhs>> {};
+  struct Parallel : CompositionBase<Parallel<Lhs, Rhs>, ins<Lhs> + ins<Rhs>, outs<Lhs> + outs<Rhs>, Lhs, Rhs> {};
 
   /// The parallel composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
@@ -163,7 +176,7 @@ namespace eda {
   /// Given input `x0` and blocks `l, r`, outputs `r(l(x0))`
   template<AnyBlock Lhs, AnyBlock Rhs>
   requires(outs<Lhs> == ins<Rhs>) //
-    struct Sequential : BinOp<Sequential<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+    struct Sequential : CompositionBase<Sequential<Lhs, Rhs>, ins<Lhs>, outs<Rhs>, Lhs, Rhs> {};
 
   /// The sequential composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
@@ -218,7 +231,7 @@ namespace eda {
   /// of the previous evaluation.
   template<AnyBlock Lhs, AnyBlock Rhs>
   requires(ins<Rhs> <= outs<Lhs>) && (outs<Rhs> <= ins<Lhs>) //
-    struct Recursive : BinOp<Recursive<Lhs, Rhs>, Lhs, Rhs, ins<Lhs> - outs<Rhs>, outs<Lhs>> {};
+    struct Recursive : CompositionBase<Recursive<Lhs, Rhs>, ins<Lhs> - outs<Rhs>, outs<Lhs>, Lhs, Rhs> {};
 
   /// The recursive composition of two blocks
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
@@ -235,7 +248,7 @@ namespace eda {
   /// to fit the arity of `r`.
   template<AnyBlock Lhs, AnyBlock Rhs>
   requires(ins<Rhs> % outs<Lhs> == 0) //
-    struct Split : BinOp<Split<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+    struct Split : CompositionBase<Split<Lhs, Rhs>, ins<Lhs>, outs<Rhs>, Lhs, Rhs> {};
 
   /// The split composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
@@ -252,7 +265,7 @@ namespace eda {
   /// input to `r` is the sum of all `l(x)[i mod ins<r>]`.
   template<AnyBlock Lhs, AnyBlock Rhs>
   requires(outs<Lhs> % ins<Rhs> == 0) //
-    struct Merge : BinOp<Merge<Lhs, Rhs>, Lhs, Rhs, ins<Lhs>, outs<Rhs>> {};
+    struct Merge : CompositionBase<Merge<Lhs, Rhs>, ins<Lhs>, outs<Rhs>, Lhs, Rhs> {};
 
   /// The merge composition of two blocks.
   template<AnyBlockRef Lhs, AnyBlockRef Rhs>
