@@ -68,7 +68,7 @@ namespace eda {
     return evaluator<std::remove_cvref_t<T>>(b);
   }
 
-  // DYN EVALUATOR /////////////////////////////////////
+  // DYN EVALUATOR ///////////////////////////////////// $\label{code:dyn_eval}$
 
   template<std::size_t Ins, std::size_t Outs>
   struct DynEvaluator {
@@ -172,7 +172,7 @@ namespace eda {
     }
   };
 
-  // PARALLEL //////////////////////////////////////////
+  // PARALLEL ////////////////////////////////////////// $\label{code:comp_eval}$
 
   template<AnyBlock Lhs, AnyBlock Rhs>
   struct evaluator<Parallel<Lhs, Rhs>> : EvaluatorBase<Parallel<Lhs, Rhs>> {
@@ -360,7 +360,7 @@ namespace eda {
     Ref ref_;
   };
 
-  // FUNCTION //////////////////////////////////////////
+  // FUNCTION ////////////////////////////////////////// $\label{code:extra_eval}$
 
   /// Adapt a function to a block
   template<std::size_t In, std::size_t Out, typename F>

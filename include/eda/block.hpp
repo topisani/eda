@@ -148,7 +148,7 @@ namespace eda {
   template<std::size_t N = 1>
   constexpr Cut<N> cut;
 
-  // PARALLEL //////////////////////////////////////////
+  // PARALLEL ////////////////////////////////////////// 
 
   /// Parallel composition block.
   ///
@@ -223,7 +223,7 @@ namespace eda {
     return repeat<N>(block, [](auto&& a, auto&& b) { return par(a, b); });
   }
 
-  // RECURSIVE /////////////////////////////////////////
+  // RECURSIVE ///////////////////////////////////////// $\label{code:remaining_blocks}$
 
   /// Recursive composition block.
   ///
@@ -315,7 +315,7 @@ namespace eda {
   struct Delay : BlockBase<Delay, 2, 1> {};
   constexpr Delay delay;
 
-  // FUNCTION //////////////////////////////////////////
+  // FUNCTION ////////////////////////////////////////// $\label{code:extra_block}$
 
   /// Adapt a function to a block
   template<std::size_t In, std::size_t Out, util::Callable<Frame<Out>(Frame<In>)> F>
