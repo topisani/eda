@@ -3,6 +3,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(sources 
   main.cpp
   block.cpp
+  benchmarks.cpp
 )
 
 add_executable(tests ${sources})

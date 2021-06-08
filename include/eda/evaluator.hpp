@@ -72,6 +72,8 @@ namespace eda {
 
   template<std::size_t Ins, std::size_t Outs>
   struct DynEvaluator {
+    DynEvaluator() = default;
+  
     template<ABlock<Ins, Outs> Block>
     DynEvaluator(evaluator<Block> evaluator) : func_([evaluator](Frame<Ins> in) mutable { return evaluator.eval(in); })
     {}

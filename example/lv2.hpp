@@ -1,7 +1,7 @@
 #pragma once
 #include <concepts>
 
-#include "lv2/lv2plug.in/ns/lv2core/lv2.h"
+#include "lv2/core/lv2.h"
 
 struct LV2Plugin {
   virtual void connect_port(uint32_t port, float* data) = 0;

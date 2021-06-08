@@ -16,8 +16,6 @@
 using namespace eda;
 using namespace eda::syntax;
 
-auto block = (_, _) | (_);
-
 namespace eda {
 
   using namespace syntax;
